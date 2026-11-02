@@ -1,0 +1,14 @@
+{
+  "name": "ishit-chaoxing-web-panel",
+  "version": "2.0.0",
+  "description": "ChaoXing Auto Sign-In, NapCat Broadcast & Peer Helper Web Control Center",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js"
+  },
+  "dependencies": {
+    "jpeg-js": "^0.4.4",
+    "jsqr": "^1.4.0",
+    "pngjs": "^7.0.0"
+  }
+}

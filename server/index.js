@@ -166,7 +166,7 @@ const defaultStore = {
   userScheduleConfigs: {},
   panelAuth: {
     enabled: true,
-    username: 'admin',
+    username: 'ishit',
     passwordHash: EncryptionUtil.md5Hash('ishit2026'),
     sessions: {},
   },

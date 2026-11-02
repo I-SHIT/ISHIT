@@ -832,8 +832,23 @@ class CXProtocol {
     return uploadRes?.data?.objectId || uploadRes?.objectId || null;
   }
 
-  static async getFaceParams(user, activeId) {
+  static async getFaceParams(user, activeId, forceRefreshDevice = true) {
     try {
+      // 每次进行人脸活体协议签名前，先刷新一次最新 clientId (cxcid / sc)，防止因 SSO 令牌过期触发“[face]活体协议验证不通过”
+      if (forceRefreshDevice || !user?.deviceInfo?.cid || !user?.deviceInfo?.sc) {
+        try {
+          const freshUser = await this.fetchUserInfo({ userId: user.uid });
+          if (freshUser && freshUser.deviceInfo && freshUser.deviceInfo.cid && freshUser.deviceInfo.sc) {
+            user.deviceInfo = freshUser.deviceInfo;
+            const accInStore = (store.accounts || []).find((a) => String(a.uid) === String(user.uid));
+            if (accInStore) {
+              accInStore.deviceInfo = freshUser.deviceInfo;
+              saveStore();
+            }
+          }
+        } catch (_) {}
+      }
+
       const enc = EncryptionUtil.md5Hash(String(user.uid) + Constant.getFaceSalt);
       const res = await cxRequest(`https://passport2-api.chaoxing.com/api/getUserFaceid?enc=${enc}`, { userId: user.uid });
       if (res?.result !== 1 || !res.data) return {};

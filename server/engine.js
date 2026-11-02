@@ -606,7 +606,7 @@ async function performSingleAccountSign({
   }
 
   let faceParams = {};
-  if (needFace && (signType === 'location' || signType === 'qrCode')) {
+  if (needFace) {
     faceParams = await CXProtocol.getFaceParams(user, activeId);
   }
 
@@ -629,6 +629,11 @@ async function performSingleAccountSign({
       name: user.name || '',
       deviceCode,
     };
+    if (faceParams.faceId) {
+      baseParams.currentFaceId = faceParams.faceId;
+      baseParams.ifCFP = '1';
+      baseParams.faceEnc = faceParams.faceEnc || '';
+    }
     if (validate) baseParams.validate = validate;
 
     if (chosenObjId) {
@@ -684,6 +689,9 @@ async function performSingleAccountSign({
       deviceCode,
       location: loc.locationJson,
       locationResult: loc.locationResultJson,
+      currentFaceId: faceParams.faceId || '',
+      ifCFP: faceParams.faceId ? '1' : '0',
+      faceEnc: faceParams.faceEnc || '',
     };
     if (validate) formData.validate = validate;
     rawResp = await cxRequest(signUrl, { method: 'POST', body: formData, userId: user.uid });
@@ -905,8 +913,8 @@ async function executeSignForActive({
     try {
       const attendInfo = await CXProtocol.getAttendInfoWeb(activeId, user.uid);
       const status = Number(attendInfo?.status ?? 0);
-      if (status === 1) {
-        results.push({ uid: user.uid, name: user.name, ok: true, already: true, msg: '已签到' });
+      if (status === 1 || status === 9) {
+        results.push({ uid: user.uid, name: user.name, ok: true, already: true, msg: status === 9 ? '已签到(迟到)' : '已签到' });
         continue;
       }
 
@@ -982,7 +990,7 @@ async function executeSignForActive({
                 });
               }
             }
-            if (blindResp === 'success' || blindResp.includes('已签到')) {
+            if (blindResp === 'success' || blindResp === 'success2' || blindResp.includes('已签到')) {
               sysLog('SIGN', `账号[${user.name || user.uid}] 二维码免扫码盲狙成功！`, { uids: [user.uid] });
               results.push({
                 uid: user.uid,
@@ -1061,7 +1069,7 @@ async function executeSignForActive({
             longitude,
             objectId,
           });
-          const retryOk = retryResp === 'success' || retryResp.includes('已签到');
+          const retryOk = retryResp === 'success' || retryResp === 'success2' || retryResp.includes('已签到');
           if (retryOk || !retryResp.startsWith('validate')) {
             // 若此前有残留的待验证记录，自动清理
             if (store.pendingCaptchas) {
@@ -1072,7 +1080,7 @@ async function executeSignForActive({
               uid: user.uid,
               name: user.name,
               ok: retryOk,
-              msg: retryOk ? `${retryResp} (已自动过滑块 x=${autoSolved.xValue})` : (retryResp || '无响应'),
+              msg: retryOk ? `${retryResp === 'success2' ? 'success(迟到签)' : retryResp} (已自动过滑块 x=${autoSolved.xValue})` : (retryResp || '无响应'),
             });
             continue;
           }
@@ -1117,7 +1125,7 @@ async function executeSignForActive({
         continue;
       }
 
-      const ok = respStr === 'success' || respStr.includes('已签到');
+      const ok = respStr === 'success' || respStr === 'success2' || respStr.includes('已签到');
       results.push({
         uid: user.uid,
         name: user.name,

@@ -35,6 +35,7 @@ function showToast(msg) {
 }
 
 const DEFAULT_REMOTE_API_BASE = 'http://47.117.27.75';
+const DEFAULT_HTTPS_TUNNEL_BASE = 'https://appraisal-occurring-performance-phrase.trycloudflare.com';
 const FALLBACK_DIRECT_API_BASE = 'http://47.117.27.75';
 let _loadedConfigEndpoint = null;
 
@@ -75,6 +76,10 @@ function normalizeApiBaseUrl(raw) {
 
 function resolveEndpointFromConfigObj(cfg) {
   if (!cfg || typeof cfg !== 'object') return '';
+  // 若当前为公网 Web 浏览器 HTTPS 环境（如 https://ishit.pw），自动使用加密隧道 httpsApiBaseUrl 绕过 Mixed Content 与备案墙
+  if (!isStandaloneClientEnv() && location.protocol === 'https:' && cfg.httpsApiBaseUrl) {
+    return normalizeApiBaseUrl(cfg.httpsApiBaseUrl);
+  }
   if (cfg.apiBaseUrl && String(cfg.apiBaseUrl).trim()) {
     return normalizeApiBaseUrl(cfg.apiBaseUrl);
   }
@@ -127,7 +132,9 @@ async function loadExternalConfigJson() {
       }
     }
   } catch (_) {}
-  _loadedConfigEndpoint = DEFAULT_REMOTE_API_BASE;
+  _loadedConfigEndpoint = (!isStandaloneClientEnv() && location.protocol === 'https:')
+    ? DEFAULT_HTTPS_TUNNEL_BASE
+    : DEFAULT_REMOTE_API_BASE;
   return _loadedConfigEndpoint;
 }
 
@@ -137,7 +144,9 @@ function getApiBaseUrl() {
   if (_loadedConfigEndpoint) {
     return _loadedConfigEndpoint;
   }
-  return DEFAULT_REMOTE_API_BASE;
+  return (!isStandaloneClientEnv() && location.protocol === 'https:')
+    ? DEFAULT_HTTPS_TUNNEL_BASE
+    : DEFAULT_REMOTE_API_BASE;
 }
 
 function syncApiEndpointUi() {}

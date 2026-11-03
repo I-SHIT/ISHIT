@@ -2,5 +2,6 @@
   "serverHost": "47.117.27.75",
   "serverPort": 80,
   "apiBaseUrl": "http://47.117.27.75",
+  "httpsApiBaseUrl": "https://appraisal-occurring-performance-phrase.trycloudflare.com",
   "directIpUrl": "http://47.117.27.75"
 }

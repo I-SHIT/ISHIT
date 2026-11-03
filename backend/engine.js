@@ -1208,9 +1208,9 @@ async function executeSignForActive({
       targetNames: (pendingHelperUsers.length > 0 ? pendingHelperUsers : accounts).map((u) => u.name || u.uid),
       captchaKey: needCaptchaKey,
     });
-    let rawBaseUrl = String(store.napcat?.publicBaseUrl || 'https://ishit.pw').trim();
+    let rawBaseUrl = String(store.napcat?.publicBaseUrl || 'http://ishit.pw').trim();
     if (!rawBaseUrl || /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/.*)?$/i.test(rawBaseUrl)) {
-      rawBaseUrl = 'https://ishit.pw';
+      rawBaseUrl = 'http://ishit.pw';
     } else if (!/^https?:\/\//i.test(rawBaseUrl)) {
       rawBaseUrl = `http://${rawBaseUrl}`;
     }

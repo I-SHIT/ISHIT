@@ -325,7 +325,7 @@ const server = http.createServer(async (req, res) => {
         return res.end(fs.readFileSync(path.join(webRoot, 'index.html'), 'utf8'));
       }
     } else if (pathname === '/' || pathname === '/index.html') {
-      return sendJson(res, { ok: true, service: 'ISHIT Backend API', version: 'beta', webUrl: 'https://ishit.pw' });
+      return sendJson(res, { ok: true, service: 'ISHIT Backend API', version: 'beta', webUrl: 'http://ishit.pw' });
     }
 
     // 0. 面板访问登录鉴权 (支持 Admin / User 权限分级)
@@ -1363,9 +1363,9 @@ const server = http.createServer(async (req, res) => {
         creatorUsername: currentSess?.username || ensurePanelAuthStore().username || 'ishit',
         creatorRole: currentSess?.role || 'admin',
       });
-      let rawPublicBase = String(store.napcat?.publicBaseUrl || 'https://ishit.pw').trim();
+      let rawPublicBase = String(store.napcat?.publicBaseUrl || 'http://ishit.pw').trim();
       if (!rawPublicBase || /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/.*)?$/i.test(rawPublicBase)) {
-        rawPublicBase = 'https://ishit.pw';
+        rawPublicBase = 'http://ishit.pw';
       } else if (!/^https?:\/\//i.test(rawPublicBase)) {
         rawPublicBase = `http://${rawPublicBase}`;
       }
@@ -1496,7 +1496,7 @@ const server = http.createServer(async (req, res) => {
       const body = await readBodyJson(req);
       if (body.publicBaseUrl !== undefined) {
         let pb = String(body.publicBaseUrl || '').trim();
-        if (!pb) pb = 'https://ishit.pw';
+        if (!pb) pb = 'http://ishit.pw';
         else if (!/^https?:\/\//i.test(pb)) pb = `http://${pb}`;
         body.publicBaseUrl = pb.replace(/\/+$/, '');
       }

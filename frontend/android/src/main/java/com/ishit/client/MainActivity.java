@@ -31,7 +31,7 @@ public class MainActivity extends Activity {
     public static final int FILE_CHOOSER_REQ_CODE = 1001;
     public static final int RUNTIME_PERM_REQ_CODE = 1002;
     public static final String LOCAL_ASSET_INDEX = "file:///android_asset/web/index.html";
-    public static final String DEFAULT_CONFIG_JSON = "{\n  \"serverHost\": \"api.ishit.pw\",\n  \"serverPort\": 443,\n  \"apiBaseUrl\": \"https://api.ishit.pw\",\n  \"directIpUrl\": \"http://47.117.27.75:8080\"\n}";
+    public static final String DEFAULT_CONFIG_JSON = "{\n  \"serverHost\": \"47.117.27.75\",\n  \"serverPort\": 80,\n  \"apiBaseUrl\": \"http://47.117.27.75\",\n  \"directIpUrl\": \"http://47.117.27.75\"\n}";
 
     public WebView webView;
     public ValueCallback<Uri[]> filePathCallback;
@@ -112,7 +112,11 @@ public class MainActivity extends Activity {
             }
             fis.close();
             String content = new String(bos.toByteArray(), StandardCharsets.UTF_8).trim();
-            if (content.isEmpty()) {
+            if (content.isEmpty() || content.contains("api.ishit.pw") || content.contains(":8080")) {
+                FileOutputStream fos = new FileOutputStream(cfgFile);
+                fos.write(DEFAULT_CONFIG_JSON.getBytes(StandardCharsets.UTF_8));
+                fos.flush();
+                fos.close();
                 return DEFAULT_CONFIG_JSON;
             }
             return content;

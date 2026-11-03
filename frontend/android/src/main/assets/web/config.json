@@ -1,7 +1,6 @@
 {
-  "serverHost": "api.ishit.pw",
-  "serverPort": 443,
-  "apiBaseUrl": "https://api.ishit.pw",
-  "httpsApiBaseUrl": "https://api.ishit.pw",
-  "directIpUrl": "http://47.117.27.75:8080"
+  "serverHost": "47.117.27.75",
+  "serverPort": 80,
+  "apiBaseUrl": "http://47.117.27.75",
+  "directIpUrl": "http://47.117.27.75"
 }

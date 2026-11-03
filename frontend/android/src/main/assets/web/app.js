@@ -34,8 +34,8 @@ function showToast(msg) {
   el._t = setTimeout(() => el.classList.remove('show'), 2600);
 }
 
-const DEFAULT_REMOTE_API_BASE = 'https://api.ishit.pw';
-const FALLBACK_DIRECT_API_BASE = 'http://47.117.27.75:8080';
+const DEFAULT_REMOTE_API_BASE = 'http://47.117.27.75';
+const FALLBACK_DIRECT_API_BASE = 'http://47.117.27.75';
 let _loadedConfigEndpoint = null;
 
 function detectPlatformType() {
@@ -66,6 +66,15 @@ function isStandaloneClientEnv() {
   return false;
 }
 
+// 若用户在 http://ishit.pw (GitHub Pages) 访问，而后端为裸公网 IP HTTP (http://47.117.27.75)，自动跳回 http://ishit.pw 以避免浏览器 Mixed Content 拦截
+(function ensureHttpForBareIpBackend() {
+  try {
+    if (!isStandaloneClientEnv() && location.protocol === 'https:' && location.hostname.endsWith('ishit.pw')) {
+      location.replace(`http://${location.host}${location.pathname}${location.search}${location.hash}`);
+    }
+  } catch (_) {}
+})();
+
 function normalizeApiBaseUrl(raw) {
   let s = String(raw || '').trim();
   if (!s) return '';
@@ -80,7 +89,7 @@ function resolveEndpointFromConfigObj(cfg) {
   }
   if (cfg.serverHost && String(cfg.serverHost).trim()) {
     const host = String(cfg.serverHost).trim();
-    const port = cfg.serverPort ? `:${cfg.serverPort}` : '';
+    const port = cfg.serverPort && Number(cfg.serverPort) !== 80 && Number(cfg.serverPort) !== 443 ? `:${cfg.serverPort}` : '';
     return normalizeApiBaseUrl(`${host}${port}`);
   }
   return '';
@@ -120,18 +129,14 @@ async function loadExternalConfigJson() {
     const res = await fetch(`config.json?_t=${Date.now()}`, { cache: 'no-store' });
     if (res.ok) {
       const cfg = await res.json();
-      let parsed = resolveEndpointFromConfigObj(cfg);
-      // 若当前页面在 HTTPS (如 GitHub Pages https://ishit.pw) 下打开，而配置填写了裸 HTTP，优先升级到 httpsApiBaseUrl 防止 Mixed Content 拦截
-      if (location.protocol === 'https:' && parsed.startsWith('http://') && cfg.httpsApiBaseUrl) {
-        parsed = normalizeApiBaseUrl(cfg.httpsApiBaseUrl);
-      }
+      const parsed = resolveEndpointFromConfigObj(cfg);
       if (parsed) {
         _loadedConfigEndpoint = parsed;
         return _loadedConfigEndpoint;
       }
     }
   } catch (_) {}
-  _loadedConfigEndpoint = location.protocol === 'https:' ? DEFAULT_REMOTE_API_BASE : FALLBACK_DIRECT_API_BASE;
+  _loadedConfigEndpoint = DEFAULT_REMOTE_API_BASE;
   return _loadedConfigEndpoint;
 }
 
@@ -141,10 +146,7 @@ function getApiBaseUrl() {
   if (_loadedConfigEndpoint) {
     return _loadedConfigEndpoint;
   }
-  if (isStandaloneClientEnv()) {
-    return DEFAULT_REMOTE_API_BASE;
-  }
-  return '';
+  return DEFAULT_REMOTE_API_BASE;
 }
 
 function syncApiEndpointUi() {}
@@ -2493,7 +2495,7 @@ function populateNapCatInputs(nc) {
   document.getElementById('napEnabled').checked = Boolean(nc.enabled);
   document.getElementById('napHttpUrl').value = nc.httpUrl || 'http://127.0.0.1:6099/plugin/napcat-plugin-qce/api';
   document.getElementById('napToken').value = nc.accessToken || '';
-  document.getElementById('napPublicUrl').value = nc.publicBaseUrl || 'https://ishit.pw';
+  document.getElementById('napPublicUrl').value = nc.publicBaseUrl || 'http://ishit.pw';
   state.napcatGroups = (nc.groups || nc.groupIds || []).map((g) => String(g).trim()).filter(Boolean);
   state.napcatPrivates = (nc.privateUsers || nc.privateIds || []).map((u) => String(u).trim()).filter(Boolean);
   renderNapCatGroupsList(state.napcatGroups);

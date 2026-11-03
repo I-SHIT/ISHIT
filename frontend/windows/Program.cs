@@ -82,7 +82,7 @@ namespace ISHIT.Desktop
 
         private string LoadOrCreateRootConfigJson(string wwwPath)
         {
-            const string defaultJson = "{\r\n  \"serverHost\": \"api.ishit.pw\",\r\n  \"serverPort\": 443,\r\n  \"apiBaseUrl\": \"https://api.ishit.pw\",\r\n  \"directIpUrl\": \"http://47.117.27.75:8080\"\r\n}";
+            const string defaultJson = "{\r\n  \"serverHost\": \"47.117.27.75\",\r\n  \"serverPort\": 80,\r\n  \"apiBaseUrl\": \"http://47.117.27.75\",\r\n  \"directIpUrl\": \"http://47.117.27.75\"\r\n}";
             string rootCfgPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json");
             try
             {
@@ -91,7 +91,7 @@ namespace ISHIT.Desktop
                     File.WriteAllText(rootCfgPath, defaultJson, new UTF8Encoding(false));
                 }
                 string raw = File.ReadAllText(rootCfgPath, Encoding.UTF8).Trim();
-                if (string.IsNullOrWhiteSpace(raw))
+                if (string.IsNullOrWhiteSpace(raw) || raw.Contains("api.ishit.pw") || raw.Contains(":8080"))
                 {
                     raw = defaultJson;
                     File.WriteAllText(rootCfgPath, defaultJson, new UTF8Encoding(false));

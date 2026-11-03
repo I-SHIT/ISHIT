@@ -177,7 +177,7 @@ const defaultStore = {
     groupIds: [],
     privateIds: [],
     groupBindings: {},
-    publicBaseUrl: 'https://ishit.pw',
+    publicBaseUrl: 'http://ishit.pw',
   },
 };
 

@@ -47,6 +47,7 @@ function sendJson(res, data, status = 200, extraHeaders = {}) {
     'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, X-Panel-Token, X-Helper-Token, Authorization',
     'Access-Control-Expose-Headers': 'X-Panel-Token',
+    'Access-Control-Allow-Private-Network': 'true',
     ...extraHeaders,
   });
   res.end(payload);
@@ -284,6 +285,7 @@ const server = http.createServer(async (req, res) => {
       'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type, X-Panel-Token, X-Helper-Token, Authorization',
       'Access-Control-Max-Age': '86400',
+      'Access-Control-Allow-Private-Network': 'true',
     });
     return res.end();
   }

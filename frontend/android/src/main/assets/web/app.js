@@ -460,22 +460,31 @@ async function submitPanelLogin() {
   const password = document.getElementById('panelAuthPassword').value;
   const errEl = document.getElementById('panelAuthError');
   if (!username || !password) {
-    if (errEl) errEl.textContent = '请输入管理员账号与访问密码';
+    if (errEl) errEl.textContent = '请输入后台账号与访问密码';
+    showToast('请输入后台账号与访问密码');
     return;
   }
-  const res = await api('/api/auth/login', 'POST', { username, password });
-  if (res.ok) {
-    if (res.token) localStorage.setItem('ishit_panel_token', res.token);
-    state.panelRole = res.role || 'admin';
-    state.panelUsername = res.username || '';
-    state.selectedUid = null;
-    document.getElementById('panelAuthPassword').value = '';
-    if (errEl) errEl.textContent = '登录成功';
-    showToast('已登录 ISHIT');
-    enterAdminPanel();
-  } else {
-    if (errEl) errEl.textContent = res.msg || '账号或密码错误';
-    showToast(res.msg || '账号或密码错误');
+  if (errEl) errEl.textContent = '正在连接服务器验证...';
+  try {
+    const res = await api('/api/auth/login', 'POST', { username, password });
+    if (res && res.ok) {
+      if (res.token) localStorage.setItem('ishit_panel_token', res.token);
+      state.panelRole = res.role || 'admin';
+      state.panelUsername = res.username || '';
+      state.selectedUid = null;
+      document.getElementById('panelAuthPassword').value = '';
+      if (errEl) errEl.textContent = '登录成功';
+      showToast('已登录 ISHIT');
+      enterAdminPanel();
+    } else {
+      const msg = (res && res.msg) || '账号或密码错误';
+      if (errEl) errEl.textContent = msg;
+      showToast(msg);
+    }
+  } catch (err) {
+    const errMsg = '连接后端失败 (' + (getApiBaseUrl() || '47.117.27.75') + ')：' + (err.message || '网络异常');
+    if (errEl) errEl.textContent = errMsg;
+    showToast(errMsg);
   }
 }
 

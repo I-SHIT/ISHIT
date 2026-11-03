@@ -66,15 +66,6 @@ function isStandaloneClientEnv() {
   return false;
 }
 
-// 若用户在 http://ishit.pw (GitHub Pages) 访问，而后端为裸公网 IP HTTP (http://47.117.27.75)，自动跳回 http://ishit.pw 以避免浏览器 Mixed Content 拦截
-(function ensureHttpForBareIpBackend() {
-  try {
-    if (!isStandaloneClientEnv() && location.protocol === 'https:' && location.hostname.endsWith('ishit.pw')) {
-      location.replace(`http://${location.host}${location.pathname}${location.search}${location.hash}`);
-    }
-  } catch (_) {}
-})();
-
 function normalizeApiBaseUrl(raw) {
   let s = String(raw || '').trim();
   if (!s) return '';

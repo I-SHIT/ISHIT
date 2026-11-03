@@ -2243,24 +2243,51 @@ function renderAccountsList(accounts, currentUid) {
     .map((a) => {
       const owner = a.ownerUsername || 'ishit';
       const isMine = isAdmin || owner === curUser;
+      const hasFace = Boolean(a.cachedFaceObjectId);
+      const faceTag = hasFace
+        ? '<span class="tag" title="已缓存本人人脸底图，支持机房环境直接过人脸签到">人脸已就绪</span>'
+        : '<span class="tag" style="opacity:0.75;" title="云服务器环境请点击右侧「人脸照片」上传一张本人正脸照">待绑人脸照</span>';
       return `
     <div class="list-row">
       <div>
-        <div class="row" style="gap:6px;">
+        <div class="row" style="gap:6px; flex-wrap:wrap;">
           <span style="font-weight:500;">${escapeHtml(a.name)}</span>
           <span class="tag ${owner === curUser ? 'solid' : ''}">归属用户: ${escapeHtml(owner)}</span>
+          ${faceTag}
           ${isAdmin && a.uid === currentUid ? '<span class="tag solid">主账号</span>' : ''}
         </div>
         <div style="font-size:11px; color:var(--muted); margin-top:2px;">${escapeHtml(a.school || a.schoolname || '')} · UID: ${escapeHtml(a.uid)}</div>
       </div>
       <div class="row">
         <button class="btn btn-ghost btn-sm" onclick="onSelectConfigUser('${escapeHtml(a.uid)}');switchUserSubTab('courses')">${isMine ? '进入工作台' : '查看课程/课表'}</button>
+        ${isMine ? `<label class="btn btn-ghost btn-sm" style="margin:0; cursor:pointer;" title="上传本人正脸照片用于通过人脸识别签到">${hasFace ? '更新人脸' : '上传人脸'}<input type="file" accept="image/*" style="display:none;" onchange="uploadAccountFacePhoto('${escapeHtml(a.uid)}', this)" /></label>` : ''}
         ${isAdmin && a.uid !== currentUid ? `<button class="btn btn-ghost btn-sm" onclick="accountAction('setPrimary','${escapeHtml(a.uid)}')">设为主号</button>` : ''}
         ${isMine ? `<button class="btn btn-ghost btn-sm" onclick="accountAction('delete','${escapeHtml(a.uid)}')">移除</button>` : ''}
       </div>
     </div>`;
     })
     .join('');
+}
+
+async function uploadAccountFacePhoto(uid, inputEl) {
+  const file = inputEl?.files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = async () => {
+    showToast('正在上传人脸底图到超星云盘...');
+    const res = await api('/api/accounts/action', 'POST', {
+      action: 'uploadFace',
+      uid,
+      base64Image: reader.result,
+    });
+    if (res.ok) {
+      showToast('人脸底图已绑定，自动人脸识别已就绪');
+      refreshStatus(false);
+    } else {
+      showToast(res.msg || '上传人脸底图失败');
+    }
+  };
+  reader.readAsDataURL(file);
 }
 
 async function accountAction(action, uid) {

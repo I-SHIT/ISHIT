@@ -297,26 +297,63 @@ async function broadcastNapCat(message, { force = false, eventType = 'sign_resul
 
   if (isBridgeUrl) {
     try {
-      const resp = await postJson(
-        bridgeEndpoint,
-        {
-          eventType,
-          message,
-          groups,
-          privateUsers,
-          groupMessages,
-          ...eventData,
-        },
-        headers
-      );
-      const data = resp.data || {};
-      if (data.ok || data.sentCount > 0) {
-        sysLog('NAPCAT', `Bridge 插件推送成功 (${eventType}): 发送 ${data.sentCount} 个目标`);
-        return { sent: true, sentCount: data.sentCount, details: data.details };
+      let totalSent = 0;
+      const allDetails = [];
+      let lastReason = '';
+
+      // 逐群发送携带该群专属 [CQ:at,qq=...] 后缀的 message，确保即使旧版 Bridge 插件未读取 groupMessages 也能 100% 触发 @ 通知！
+      for (const gid of groups) {
+        const finalGroupMsg = groupMessages[String(gid)] || message;
+        const resp = await postJson(
+          bridgeEndpoint,
+          {
+            eventType,
+            message: finalGroupMsg,
+            groups: [String(gid)],
+            privateUsers: [],
+            groupMessages: { [String(gid)]: finalGroupMsg },
+            ...eventData,
+          },
+          headers
+        );
+        const data = resp.data || {};
+        if (data.ok || data.sentCount > 0) {
+          totalSent += Number(data.sentCount || 1);
+        } else {
+          lastReason = data.reason || data.message || lastReason;
+        }
+        if (Array.isArray(data.details)) allDetails.push(...data.details);
       }
-      const reason = data.reason || data.message || '插件未返回成功状态（请检查是否配置了群号或私聊 QQ）';
+
+      if (privateUsers.length > 0 || groups.length === 0) {
+        const resp = await postJson(
+          bridgeEndpoint,
+          {
+            eventType,
+            message,
+            groups: groups.length === 0 ? [] : [],
+            privateUsers,
+            groupMessages,
+            ...eventData,
+          },
+          headers
+        );
+        const data = resp.data || {};
+        if (data.ok || data.sentCount > 0) {
+          totalSent += Number(data.sentCount || 1);
+        } else {
+          lastReason = data.reason || data.message || lastReason;
+        }
+        if (Array.isArray(data.details)) allDetails.push(...data.details);
+      }
+
+      if (totalSent > 0) {
+        sysLog('NAPCAT', `Bridge 插件推送成功 (${eventType}): 发送 ${totalSent} 个目标`);
+        return { sent: true, sentCount: totalSent, details: allDetails };
+      }
+      const reason = lastReason || '插件未返回成功状态（请检查是否配置了群号或私聊 QQ）';
       sysLog('WARN', `Bridge 插件响应: ${reason}`);
-      return { sent: false, reason, details: data.details };
+      return { sent: false, reason, details: allDetails };
     } catch (e) {
       sysLog('ERROR', `Bridge 插件请求异常: ${e.message}`);
       return { sent: false, reason: e.message };
@@ -1257,12 +1294,18 @@ async function executeSignForActive({
       : store.napcat?.notifyOnComplete !== false;
 
   if (shouldNotify) {
+    const allInvolvedUids = results.map((r) => String(r.uid)).filter(Boolean);
+    const allInvolvedNames = results.map((r) => r.name || r.uid).join(' / ');
+    const statusFingerprint = results.map((r) => `${r.uid}:${r.ok ? 1 : 0}`).sort().join(',');
     await broadcastNapCatWithRetry(lines.join('\n'), {
       eventType: helperShareUrl ? 'help_request' : 'sign_result',
-      dedupKey: helperShareUrl ? `help_${activeId}` : `ok_${activeId}_${succeededUsers.map((u) => u.uid).sort().join(',')}_${triggerSource}`,
+      dedupKey: helperShareUrl ? `help_${activeId}` : `res_${activeId}_${statusFingerprint}_${triggerSource}`,
       eventData: {
-        title: helperShareUrl ? `帮 ${mergedNamesStr} 签到《${courseName}》` : `签到成功《${courseName}》`,
-        targetNames: helperShareUrl ? mergedNamesStr : successNamesStr,
+        title: helperShareUrl
+          ? `帮 ${mergedNamesStr} 签到《${courseName}》`
+          : (failedUsers.length === 0 ? `签到成功《${courseName}》` : `签到结果通知《${courseName}》`),
+        targetUids: allInvolvedUids,
+        targetNames: helperShareUrl ? mergedNamesStr : (successNamesStr || allInvolvedNames),
         courseName,
         activeName,
         signType,
@@ -1704,11 +1747,34 @@ async function pollCoursesOnce({ forceAll = false, triggerSource = '自动轮询
                 stats.endTimeMs > Date.now()
                   ? `，距截止剩 ${Math.max(1, Math.round((stats.endTimeMs - Date.now()) / 1000))}s`
                   : '';
+              const deferredNames = deferredUids
+                .map((u) => (store.accounts || []).find((a) => String(a.uid) === String(u))?.name || u)
+                .join(' / ');
               sysLog(
                 'PROTECT',
                 `[人数保护] 《${course.name}·${act.name}》当前已签 ${stats.signedCount}/${stats.totalCount} (${(stats.signRatio * 100).toFixed(1)}%) < 阈值 ${(act.thresholdRatio * 100).toFixed(0)}%，${deferredUids.length} 个账号已挂入 3s 高频盯盘与临期压哨保护${remainTip}`,
                 { uids: deferredUids, ownerUsernames: scopedLogMeta.ownerUsernames }
               );
+              if (store.napcat?.notifyOnDetect !== false) {
+                broadcastNapCatWithRetry(
+                  [
+                    `[学习通签到监测] (防钓鱼人数保护等待中)`,
+                    `课程：《${course.name}》`,
+                    `活动：${act.name} (已签 ${stats.signedCount}/${stats.totalCount} 人，当前 ${(stats.signRatio * 100).toFixed(1)}% < 阈值 ${(act.thresholdRatio * 100).toFixed(0)}%)`,
+                    `等待达标账号：${deferredNames}${remainTip}`,
+                  ].join('\n'),
+                  {
+                    eventType: 'sign_result',
+                    dedupKey: `protect_wait_${act.id}_${deferredUids.slice().sort().join(',')}`,
+                    eventData: {
+                      targetUids: deferredUids,
+                      targetNames: deferredNames,
+                      courseName: course.name,
+                      activeName: act.name,
+                    },
+                  }
+                ).catch(() => {});
+              }
             }
           } else {
             act.waitingThreshold = false;
@@ -2121,6 +2187,7 @@ async function checkExternalSignCompletions() {
           dedupKey: `ext_ok_${aid}_${newlySigned.map((a) => a.uid).sort().join(',')}`,
           eventData: {
             title: `签到成功《${meta.courseName}》`,
+            targetUids: newlySigned.map((a) => String(a.uid)),
             targetNames: mergedNames,
             courseName: meta.courseName,
             activeName: meta.activeName,

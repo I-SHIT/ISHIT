@@ -197,9 +197,11 @@ function addOrUpdateAccount(user, ownerUsername = null) {
   const idx = (store.accounts || []).findIndex((a) => a.uid === user.uid);
   if (idx >= 0) {
     const prevOwner = store.accounts[idx].ownerUsername;
+    const prevFaceId = store.accounts[idx].cachedFaceObjectId;
     store.accounts[idx] = {
       ...store.accounts[idx],
       ...user,
+      cachedFaceObjectId: user.cachedFaceObjectId || prevFaceId || undefined,
       ownerUsername: prevOwner || ownerUsername || pa.username || 'ishit',
     };
   } else {
@@ -211,6 +213,8 @@ function addOrUpdateAccount(user, ownerUsername = null) {
   if (!store.currentUid) store.currentUid = user.uid;
   ensureUserProfile(user.uid);
   saveStore();
+  // 异步尝试拉取一次官方人脸底图 objectid 并缓存（在非机房拦截环境下自动持久化）
+  CXProtocol.getFaceParams(user, '0', false).catch(() => {});
 }
 
 function mergeCoursesForUser(uid) {
@@ -796,11 +800,31 @@ const server = http.createServer(async (req, res) => {
       if (action === 'refreshAll') {
         for (const acc of store.accounts || []) {
           const refreshed = await CXProtocol.fetchUserInfo({ userId: acc.uid });
-          if (refreshed) Object.assign(acc, refreshed, { status: true, ownerUsername: acc.ownerUsername });
-          else acc.status = false;
+          if (refreshed) {
+            Object.assign(acc, refreshed, {
+              status: true,
+              ownerUsername: acc.ownerUsername,
+              cachedFaceObjectId: refreshed.cachedFaceObjectId || acc.cachedFaceObjectId,
+            });
+          } else {
+            acc.status = false;
+          }
         }
         saveStore();
         return sendJson(res, { ok: true, accounts: store.accounts });
+      }
+      if (action === 'uploadFace') {
+        if (!canSessionEditCxAccount(currentSess, uid)) {
+          return sendJson(res, { ok: false, msg: '权限不足：只能为自己名下的学习通账号上传人脸底图' }, 403);
+        }
+        const acc = (store.accounts || []).find((a) => String(a.uid) === String(uid));
+        if (!acc) return sendJson(res, { ok: false, msg: '未找到该学习通账号' }, 404);
+        const cleanB64 = String(body.base64Image || '').replace(/^data:image\/\w+;base64,/, '');
+        const buf = Buffer.from(cleanB64, 'base64');
+        const faceObjId = await CXProtocol.uploadFaceImageBuffer(acc, buf);
+        if (!faceObjId) return sendJson(res, { ok: false, msg: '上传人脸底图到超星云盘失败' });
+        sysLog('ACCOUNT', `账号[${acc.name}] 已更新人脸签到照片底图 (${faceObjId.slice(0, 10)}...)`, { uids: [acc.uid] });
+        return sendJson(res, { ok: true, cachedFaceObjectId: faceObjId, accounts: store.accounts });
       }
       return sendJson(res, { ok: false, msg: '未知操作' });
     }

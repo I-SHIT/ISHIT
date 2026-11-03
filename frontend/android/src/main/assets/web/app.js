@@ -58,6 +58,78 @@ function applyPlatformLayoutClass() {
 
 applyPlatformLayoutClass();
 
+function sendWinHostCmd(cmd) {
+  try {
+    if (window.chrome && window.chrome.webview && typeof window.chrome.webview.postMessage === "function") {
+      window.chrome.webview.postMessage(cmd);
+    }
+  } catch (_) {}
+}
+
+function isInteractiveCaptionTarget(target) {
+  if (!target || typeof target.closest !== "function") return false;
+  return Boolean(target.closest("button, a, input, select, textarea, label, .win-window-controls, .status-dot"));
+}
+
+function onWinTitlebarMouseDown(e) {
+  if (detectPlatformType() !== "windows") return;
+  if (e && e.button !== 0) return;
+  if (isInteractiveCaptionTarget(e?.target)) return;
+  sendWinHostCmd("win:drag");
+}
+
+function onWinTitlebarDblClick(e) {
+  if (detectPlatformType() !== "windows") return;
+  if (isInteractiveCaptionTarget(e?.target)) return;
+  sendWinHostCmd("win:maximize");
+}
+
+window.onHostWindowStateChange = function(isMaximized) {
+  document.documentElement.classList.toggle("win-maximized", Boolean(isMaximized));
+  document.querySelectorAll(".win-max-btn").forEach((btn) => {
+    btn.innerHTML = isMaximized
+      ? '<svg class="win-icon-max" viewBox="0 0 12 12"><path d="M3.5 3.5V2.2h6.3v6.3H8.5M2.2 3.8h6v6h-6z" fill="none" stroke="currentColor" stroke-width="1.15" stroke-linejoin="round"/></svg>'
+      : '<svg class="win-icon-max" viewBox="0 0 12 12"><rect x="2.2" y="2.2" width="7.6" height="7.6" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>';
+  });
+};
+
+function mountWinResizeHandles() {
+  if (detectPlatformType() !== "windows") return;
+  if (document.getElementById("winResizeOverlay")) return;
+  const wrap = document.createElement("div");
+  wrap.id = "winResizeOverlay";
+  const dirs = ["top", "bottom", "left", "right", "topleft", "topright", "bottomleft", "bottomright"];
+  for (const d of dirs) {
+    const g = document.createElement("div");
+    g.className = `win-resize-grip win-resize-${d}`;
+    g.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) return;
+      if (document.documentElement.classList.contains("win-maximized")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      sendWinHostCmd(`win:resize:${d}`);
+    });
+    wrap.appendChild(g);
+  }
+  document.body.appendChild(wrap);
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", mountWinResizeHandles);
+} else {
+  mountWinResizeHandles();
+}
+
+function updateWinTopbarTitle(mainMod, subTitle) {
+  const el = document.getElementById("winActiveModuleTitle");
+  if (!el) return;
+  if (subTitle) {
+    el.textContent = `${mainMod} · ${subTitle}`;
+  } else {
+    el.textContent = mainMod;
+  }
+}
+
 if (!isStandaloneClientEnv() && String(location.hostname || "").toLowerCase() === "ishit.pw" && location.protocol === "http:") {
   location.replace("https://ishit.pw" + location.pathname + location.search + location.hash);
 }
@@ -375,6 +447,7 @@ function switchMainModule(mod) {
   if (hintEl) {
     if (mod === 'global') {
       hintEl.textContent = '仪表盘';
+      updateWinTopbarTitle('实时仪表盘');
     } else if (mod === 'user') {
       const curAcc = (state.status?.accounts || []).find((a) => String(a.uid) === String(state.selectedUid));
       hintEl.textContent = curAcc ? `当前配置账号：${curAcc.name} (${curAcc.uid})` : '按账号独立配置课程、课表与专属位置';
@@ -397,6 +470,8 @@ function switchUserSubTab(sub) {
   document.querySelectorAll('#winSubNavUser .win-subnav-item').forEach((b) => {
     b.classList.toggle('active', b.getAttribute('data-sub') === sub);
   });
+  const userSubLabels = { courses: '我的课程', schedule: '我的课表与 DIY', 'user-location': '位置与共享预设' };
+  updateWinTopbarTitle('账号工作台', userSubLabels[sub] || '');
   if (sub === 'user-location') {
     setTimeout(() => initMainLeafletMap(), 80);
   }
@@ -416,6 +491,8 @@ function switchSettingsSubTab(sub) {
   document.querySelectorAll('#winSubNavSettings .win-subnav-item').forEach((b) => {
     b.classList.toggle('active', b.getAttribute('data-sub') === sub);
   });
+  const settingsSubLabels = { polling: '轮询与防钓鱼', accounts: '学习通账号池', napcat: 'NapCat 推送', security: '用户与权限' };
+  updateWinTopbarTitle('系统设置', settingsSubLabels[sub] || '');
 }
 
 function switchTab(tab) {

@@ -795,7 +795,8 @@ input:checked + .slider::before {
   display: none;
 }
 
-.win-only-inline {
+.win-only-inline,
+.win-only-flex {
   display: none;
 }
 
@@ -1037,9 +1038,26 @@ html.platform-windows .app-main-viewport {
   background: #f6f6f8;
 }
 
+html.platform-windows .win-login-titlebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 10px;
+  z-index: 60;
+}
+
+html.platform-windows .win-sidebar-brand {
+  cursor: default;
+}
+
 html.platform-windows .topbar {
-  height: 54px;
-  padding: 0 24px;
+  height: 52px;
+  padding: 0 12px 0 24px;
   margin-bottom: 0;
   background: #ffffff;
   border-bottom: 1px solid var(--border);
@@ -1047,12 +1065,68 @@ html.platform-windows .topbar {
 }
 
 html.platform-windows .topbar .brand-logo,
-html.platform-windows .topbar .app-round-icon {
-  display: none;
+html.platform-windows .topbar .app-round-icon,
+html.platform-windows .win-hide-inline {
+  display: none !important;
+}
+
+html.platform-windows .win-topbar-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.01em;
+  margin-right: 4px;
 }
 
 html.platform-windows .win-only-inline {
   display: inline-flex;
+}
+
+html.platform-windows .win-only-flex {
+  display: inline-flex;
+}
+
+html.platform-windows .win-window-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 6px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border);
+}
+
+html.platform-windows .win-login-titlebar .win-window-controls {
+  border-left: none;
+  padding-left: 0;
+}
+
+html.platform-windows .win-ctrl-btn {
+  width: 34px;
+  height: 30px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #52525b;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.14s var(--ease), color 0.14s var(--ease);
+}
+
+html.platform-windows .win-ctrl-btn svg {
+  width: 12px;
+  height: 12px;
+}
+
+html.platform-windows .win-ctrl-btn:hover {
+  background: #f4f4f5;
+  color: #09090b;
+}
+
+html.platform-windows .win-ctrl-btn.win-ctrl-close:hover {
+  background: #e11d48;
+  color: #ffffff;
 }
 
 html.platform-windows .nav-bar {
@@ -1333,4 +1407,86 @@ html.platform-android .dialog {
     flex: 1;
     white-space: nowrap;
   }
+}
+
+
+html.platform-windows #winResizeOverlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+}
+
+html.platform-windows.win-maximized #winResizeOverlay {
+  display: none;
+}
+
+html.platform-windows .win-resize-grip {
+  position: fixed;
+  pointer-events: auto;
+  z-index: 9999;
+}
+
+html.platform-windows .win-resize-top {
+  top: 0;
+  left: 10px;
+  right: 10px;
+  height: 5px;
+  cursor: ns-resize;
+}
+
+html.platform-windows .win-resize-bottom {
+  bottom: 0;
+  left: 10px;
+  right: 10px;
+  height: 6px;
+  cursor: ns-resize;
+}
+
+html.platform-windows .win-resize-left {
+  left: 0;
+  top: 10px;
+  bottom: 10px;
+  width: 6px;
+  cursor: ew-resize;
+}
+
+html.platform-windows .win-resize-right {
+  right: 0;
+  top: 10px;
+  bottom: 10px;
+  width: 6px;
+  cursor: ew-resize;
+}
+
+html.platform-windows .win-resize-topleft {
+  top: 0;
+  left: 0;
+  width: 12px;
+  height: 12px;
+  cursor: nwse-resize;
+}
+
+html.platform-windows .win-resize-topright {
+  top: 0;
+  right: 0;
+  width: 12px;
+  height: 12px;
+  cursor: nesw-resize;
+}
+
+html.platform-windows .win-resize-bottomleft {
+  bottom: 0;
+  left: 0;
+  width: 12px;
+  height: 12px;
+  cursor: nesw-resize;
+}
+
+html.platform-windows .win-resize-bottomright {
+  bottom: 0;
+  right: 0;
+  width: 12px;
+  height: 12px;
+  cursor: nwse-resize;
 }

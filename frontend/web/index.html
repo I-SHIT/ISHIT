@@ -7,7 +7,7 @@
   <link rel="icon" type="image/png" href="favicon.png?v=8" />
   <link rel="shortcut icon" type="image/png" href="favicon.png?v=8" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="style.css?v=8" />
+  <link rel="stylesheet" href="style.css?v=10" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="jsqr.js?v=9"></script>
 </head>
@@ -101,6 +101,19 @@
 
 <!-- 面板访问登录页（未认证或更换设备/浏览器访问时展示，无注册入口） -->
 <div id="panelLoginApp" class="layout" style="display:none; max-width:380px; padding-top:12vh;">
+  <div class="win-login-titlebar win-only-flex" onmousedown="onWinTitlebarMouseDown(event)" ondblclick="onWinTitlebarDblClick(event)">
+    <div class="win-window-controls">
+      <button type="button" class="win-ctrl-btn" title="最小化" onclick="sendWinHostCmd('win:minimize')">
+        <svg viewBox="0 0 12 12"><path d="M2 6h8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+      </button>
+      <button type="button" class="win-ctrl-btn win-max-btn" title="最大化/还原" onclick="sendWinHostCmd('win:maximize')">
+        <svg class="win-icon-max" viewBox="0 0 12 12"><rect x="2.2" y="2.2" width="7.6" height="7.6" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+      </button>
+      <button type="button" class="win-ctrl-btn win-ctrl-close" title="关闭" onclick="sendWinHostCmd('win:close')">
+        <svg viewBox="0 0 12 12"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+  </div>
   <div class="panel">
     <div class="panel-head">
       <div class="row" style="gap:10px;">
@@ -123,7 +136,7 @@
 <div id="adminApp" class="layout app-shell" style="display:none;">
   <!-- Windows 桌面端专属左侧垂直导航坞 -->
   <aside id="winDesktopSidebar" class="win-sidebar">
-    <div class="win-sidebar-brand">
+    <div class="win-sidebar-brand" onmousedown="onWinTitlebarMouseDown(event)" ondblclick="onWinTitlebarDblClick(event)">
       <img src="favicon.png?v=8" alt="ISHIT" class="win-app-icon" />
       <div class="win-brand-meta">
         <img src="brand-logo.png?v=3" alt="ISHIT" class="win-brand-logo" />
@@ -180,17 +193,29 @@
 
   <!-- 主视口工作区 -->
   <div class="app-main-viewport">
-    <div class="topbar">
+    <div class="topbar" onmousedown="onWinTitlebarMouseDown(event)" ondblclick="onWinTitlebarDblClick(event)">
       <div class="title-group">
         <img src="favicon.png?v=8" alt="ISHIT" class="app-round-icon" />
         <img src="brand-logo.png?v=3" alt="ISHIT" class="brand-logo" />
+        <span id="winActiveModuleTitle" class="win-topbar-title win-only-inline">实时仪表盘</span>
         <span id="classStatusBadge" class="status-dot">加载中</span>
       </div>
       <div class="row topbar-actions" style="gap:8px;">
         <button type="button" class="btn btn-ghost btn-sm win-only-inline" onclick="triggerQuickSign(false)">立即扫描</button>
         <button type="button" class="btn btn-ghost btn-sm win-only-inline" onclick="refreshStatus(true)">刷新状态</button>
-        <span id="currentPanelUserBadge" class="tag"></span>
-        <button class="btn btn-ghost btn-sm" onclick="doPanelLogout()">退出</button>
+        <span id="currentPanelUserBadge" class="tag win-hide-inline"></span>
+        <button class="btn btn-ghost btn-sm win-hide-inline" onclick="doPanelLogout()">退出</button>
+        <div class="win-window-controls win-only-flex">
+          <button type="button" class="win-ctrl-btn" title="最小化" onclick="sendWinHostCmd('win:minimize')">
+            <svg viewBox="0 0 12 12"><path d="M2 6h8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+          </button>
+          <button type="button" class="win-ctrl-btn win-max-btn" title="最大化/还原" onclick="sendWinHostCmd('win:maximize')">
+            <svg class="win-icon-max" viewBox="0 0 12 12"><rect x="2.2" y="2.2" width="7.6" height="7.6" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+          </button>
+          <button type="button" class="win-ctrl-btn win-ctrl-close" title="关闭" onclick="sendWinHostCmd('win:close')">
+            <svg viewBox="0 0 12 12"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+          </button>
+        </div>
       </div>
     </div>
 

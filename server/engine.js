@@ -607,7 +607,17 @@ async function performSingleAccountSign({
 
   let faceParams = {};
   if (needFace) {
-    faceParams = await CXProtocol.getFaceParams(user, activeId);
+    performSingleAccountSign._faceCache = performSingleAccountSign._faceCache || {};
+    const faceCacheKey = `${user.uid}_${activeId}`;
+    const cachedFp = performSingleAccountSign._faceCache[faceCacheKey];
+    if (cachedFp && cachedFp.faceId && cachedFp.faceEnc && Date.now() - cachedFp.ts < 45000) {
+      faceParams = cachedFp;
+    } else {
+      faceParams = await CXProtocol.getFaceParams(user, activeId);
+      if (faceParams && faceParams.faceId) {
+        performSingleAccountSign._faceCache[faceCacheKey] = { ...faceParams, ts: Date.now() };
+      }
+    }
   }
 
   const deviceCode = EncryptionUtil.getDeviceCode();
@@ -878,7 +888,8 @@ async function executeSignForActive({
   objectId = null,
   triggerSource = '手动触发',
 }) {
-  const activeInfo = (await CXProtocol.getActiveInfoWeb(activeId)) || {};
+  const probeUid = (Array.isArray(targetUids) && targetUids[0]) || store.currentUid || store.accounts?.[0]?.uid;
+  const activeInfo = (await CXProtocol.getActiveInfoWeb(activeId, probeUid)) || {};
   const otherId = Number(activeInfo.otherId ?? 0);
   const signType = SIGN_TYPE_INDEX_MAP[otherId] || 'normal';
   const needPhoto = activeInfo.ifphoto === 1 || activeInfo.ifPhoto === 1;

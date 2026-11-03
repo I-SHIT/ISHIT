@@ -834,39 +834,79 @@ class CXProtocol {
 
   static async getFaceParams(user, activeId, forceRefreshDevice = true) {
     try {
+      const accInStore = (store.accounts || []).find((a) => String(a.uid) === String(user.uid));
       // 每次进行人脸活体协议签名前，先刷新一次最新 clientId (cxcid / sc)，防止因 SSO 令牌过期触发“[face]活体协议验证不通过”
       if (forceRefreshDevice || !user?.deviceInfo?.cid || !user?.deviceInfo?.sc) {
         try {
           const freshUser = await this.fetchUserInfo({ userId: user.uid });
           if (freshUser && freshUser.deviceInfo && freshUser.deviceInfo.cid && freshUser.deviceInfo.sc) {
             user.deviceInfo = freshUser.deviceInfo;
-            const accInStore = (store.accounts || []).find((a) => String(a.uid) === String(user.uid));
+            if (freshUser.avatar) user.avatar = freshUser.avatar;
             if (accInStore) {
               accInStore.deviceInfo = freshUser.deviceInfo;
+              if (freshUser.avatar) accInStore.avatar = freshUser.avatar;
               saveStore();
             }
           }
         } catch (_) {}
       }
 
-      const enc = EncryptionUtil.md5Hash(String(user.uid) + Constant.getFaceSalt);
-      const res = await cxRequest(`https://passport2-api.chaoxing.com/api/getUserFaceid?enc=${enc}`, { userId: user.uid });
-      if (res?.result !== 1 || !res.data) return {};
-
-      const imageUrl = res.data.http;
-      let faceId = res.data.objectid;
-      if (imageUrl) {
-        const imgBuf = await cxRequest(imageUrl, { userId: user.uid, rawBuffer: true });
-        if (Buffer.isBuffer(imgBuf) && imgBuf.length > 4) {
-          const comment = Buffer.from(`CourseHelper_${EncryptionUtil.getUniqueId().slice(0, 10)}`, 'utf8');
-          const len = comment.length + 2;
-          const comSeg = Buffer.from([0xff, 0xfe, (len >> 8) & 0xff, len & 0xff, ...comment]);
-          const modified = (imgBuf[0] === 0xff && imgBuf[1] === 0xd8)
-            ? Buffer.concat([imgBuf.subarray(0, 2), comSeg, imgBuf.subarray(2)])
-            : Buffer.concat([imgBuf, comment]);
-          const uploadedId = await this.uploadImageToPan(user, modified);
-          if (uploadedId) faceId = uploadedId;
+      // 1. 优先尝试从 passport2-api 获取历史人脸底图（注：云服务器机房 IP 可能会被超星 WAF 302 拦截到 passport403.html）
+      let imageUrl = '';
+      let faceId = user.cachedFaceObjectId || accInStore?.cachedFaceObjectId || '';
+      try {
+        const enc = EncryptionUtil.md5Hash(String(user.uid) + Constant.getFaceSalt);
+        const res = await cxRequest(`https://passport2-api.chaoxing.com/api/getUserFaceid?enc=${enc}`, { userId: user.uid });
+        if (res?.result === 1 && res.data) {
+          imageUrl = res.data.https || res.data.http || '';
+          if (res.data.objectid) {
+            faceId = res.data.objectid;
+            user.cachedFaceObjectId = faceId;
+            if (accInStore) {
+              accInStore.cachedFaceObjectId = faceId;
+              saveStore();
+            }
+          }
         }
+      } catch (_) {}
+
+      // 2. 若机房 IP 被 passport2-api 拦截，自动回退使用历史缓存底图或账号头像 URL
+      if (!imageUrl) {
+        if (faceId) {
+          imageUrl = `http://p.ananas.chaoxing.com/star3/origin/${faceId}.jpg`;
+        } else {
+          imageUrl = user.avatar || accInStore?.avatar || `http://photo.chaoxing.com/p/${user.uid}_120`;
+        }
+      }
+
+      let baseJpgBuf = null;
+      if (imageUrl) {
+        try {
+          const dl = await cxRequest(imageUrl, { userId: user.uid, rawBuffer: true });
+          if (Buffer.isBuffer(dl) && dl.length > 4 && dl[0] === 0xff && dl[1] === 0xd8) {
+            baseJpgBuf = dl;
+          }
+        } catch (_) {}
+      }
+
+      // 3. 终极兜底：若头像/底图均无法下载或非 JPEG，使用 jpeg-js 在内存中直接合成合法 JPEG 图像流
+      if (!baseJpgBuf) {
+        try {
+          const jpeg = require('jpeg-js');
+          const rawImg = { width: 120, height: 120, data: Buffer.alloc(120 * 120 * 4, 240) };
+          baseJpgBuf = jpeg.encode(rawImg, 85).data;
+        } catch (_) {}
+      }
+
+      if (Buffer.isBuffer(baseJpgBuf) && baseJpgBuf.length > 4) {
+        const comment = Buffer.from(`CourseHelper_${EncryptionUtil.getUniqueId().slice(0, 10)}`, 'utf8');
+        const len = comment.length + 2;
+        const comSeg = Buffer.from([0xff, 0xfe, (len >> 8) & 0xff, len & 0xff, ...comment]);
+        const modified = (baseJpgBuf[0] === 0xff && baseJpgBuf[1] === 0xd8)
+          ? Buffer.concat([baseJpgBuf.subarray(0, 2), comSeg, baseJpgBuf.subarray(2)])
+          : Buffer.concat([baseJpgBuf, comment]);
+        const uploadedId = await this.uploadImageToPan(user, modified);
+        if (uploadedId) faceId = uploadedId;
       }
       if (!faceId) return {};
 

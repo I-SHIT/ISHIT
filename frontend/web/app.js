@@ -58,6 +58,10 @@ function applyPlatformLayoutClass() {
 
 applyPlatformLayoutClass();
 
+if (!isStandaloneClientEnv() && String(location.hostname || "").toLowerCase() === "ishit.pw" && location.protocol === "http:") {
+  location.replace("https://ishit.pw" + location.pathname + location.search + location.hash);
+}
+
 function isStandaloneClientEnv() {
   const plat = detectPlatformType();
   if (plat === 'windows' || plat === 'android') return true;
@@ -2504,7 +2508,7 @@ function populateNapCatInputs(nc) {
   document.getElementById('napEnabled').checked = Boolean(nc.enabled);
   document.getElementById('napHttpUrl').value = nc.httpUrl || 'http://127.0.0.1:6099/plugin/napcat-plugin-qce/api';
   document.getElementById('napToken').value = nc.accessToken || '';
-  document.getElementById('napPublicUrl').value = nc.publicBaseUrl || 'http://ishit.pw';
+  document.getElementById('napPublicUrl').value = (nc.publicBaseUrl || 'https://ishit.pw').replace(/^http:\/\/ishit\.pw\b/i, 'https://ishit.pw');
   state.napcatGroups = (nc.groups || nc.groupIds || []).map((g) => String(g).trim()).filter(Boolean);
   state.napcatPrivates = (nc.privateUsers || nc.privateIds || []).map((u) => String(u).trim()).filter(Boolean);
   renderNapCatGroupsList(state.napcatGroups);
@@ -2984,61 +2988,111 @@ function stopCameraQrScanner() {
   _camActiveMode = null;
 }
 
-async function toggleCameraQrScanner(prefix = 'manual') {
+async function openCameraStreamWithFallback() {
+  const constraintsList = [
+    { video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
+    { video: { facingMode: "environment" }, audio: false },
+    { video: true, audio: false },
+  ];
+  let lastErr = null;
+  for (const c of constraintsList) {
+    try {
+      return await navigator.mediaDevices.getUserMedia(c);
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error("Camera access failed");
+}
+
+async function toggleCameraQrScanner(prefix = "manual") {
   if (_camActiveMode === prefix && _camStream) {
     stopCameraQrScanner();
     return;
   }
   stopCameraQrScanner();
 
+  if (!isStandaloneClientEnv() && location.protocol === "http:" && String(location.hostname || "").toLowerCase() === "ishit.pw") {
+    showToast("正在切换 HTTPS 安全环境以启用相机扫码...");
+    location.href = "https://ishit.pw" + location.pathname + location.search + location.hash;
+    return;
+  }
+
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    showToast('当前浏览器环境不支持直接调起相机，请点击右侧「拍照/上传图片」');
+    showToast("当前浏览器限制直接调起摄像头，已为您打开拍照/选图识别");
+    const section = document.getElementById(prefix === "help" ? "helpSectionQr" : "manualSectionQr");
+    const fileInput = section ? section.querySelector('input[type="file"]') : null;
+    if (fileInput) fileInput.click();
     return;
   }
 
   const stage = document.getElementById(`${prefix}CamStage`);
   const video = document.getElementById(`${prefix}CamVideo`);
   const btn = document.getElementById(`${prefix}CamBtn`);
-  const targetInputId = prefix === 'help' ? 'helpQrUrl' : 'manualQrUrl';
+  const targetInputId = prefix === "help" ? "helpQrUrl" : "manualQrUrl";
 
   try {
-    _camStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
-      audio: false,
-    });
+    _camStream = await openCameraStreamWithFallback();
     _camActiveMode = prefix;
+    video.setAttribute("playsinline", "true");
+    video.setAttribute("webkit-playsinline", "true");
+    video.muted = true;
     video.srcObject = _camStream;
-    stage.style.display = 'block';
-    if (btn) btn.textContent = '关闭相机';
+    stage.style.display = "block";
+    if (btn) btn.textContent = "关闭相机";
     await video.play();
 
-    const canvas = document.createElement('canvas');
-    const ctx2d = canvas.getContext('2d', { willReadFrequently: true });
-    const nativeDetector = 'BarcodeDetector' in window ? new BarcodeDetector({ formats: ['qr_code'] }) : null;
+    const canvas = document.createElement("canvas");
+    const ctx2d = canvas.getContext("2d", { willReadFrequently: true });
+    let nativeDetector = null;
+    if ("BarcodeDetector" in window) {
+      try {
+        nativeDetector = new BarcodeDetector({ formats: ["qr_code"] });
+      } catch (_) {}
+    }
 
+    let frameCount = 0;
     const scanTick = async () => {
       if (!_camStream || _camActiveMode !== prefix) return;
       if (video.readyState >= video.HAVE_ENOUGH_DATA && video.videoWidth > 0) {
+        frameCount++;
         let qrText = null;
-        if (typeof window.jsQR === 'function') {
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
-          ctx2d.drawImage(video, 0, 0, canvas.width, canvas.height);
-          const imgData = ctx2d.getImageData(0, 0, canvas.width, canvas.height);
-          const code = window.jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: 'dontInvert' });
-          if (code && code.data) qrText = code.data;
+        if (typeof window.jsQR === "function") {
+          const vw = video.videoWidth;
+          const vh = video.videoHeight;
+          canvas.width = vw;
+          canvas.height = vh;
+          ctx2d.drawImage(video, 0, 0, vw, vh);
+          const imgData = ctx2d.getImageData(0, 0, vw, vh);
+          const code = window.jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: "attemptBoth" });
+          if (code && code.data) {
+            qrText = code.data.trim();
+          } else if (frameCount % 2 === 0) {
+            // 中心区域放大裁剪识别（应对远距离拍摄屏幕小二维码）
+            const cropSize = Math.floor(Math.min(vw, vh) * 0.62);
+            const sx = Math.floor((vw - cropSize) / 2);
+            const sy = Math.floor((vh - cropSize) / 2);
+            canvas.width = 520;
+            canvas.height = 520;
+            ctx2d.fillStyle = "#ffffff";
+            ctx2d.fillRect(0, 0, 520, 520);
+            ctx2d.drawImage(video, sx, sy, cropSize, cropSize, 20, 20, 480, 480);
+            const subData = ctx2d.getImageData(0, 0, 520, 520);
+            const subCode = window.jsQR(subData.data, subData.width, subData.height, { inversionAttempts: "attemptBoth" });
+            if (subCode && subCode.data) qrText = subCode.data.trim();
+          }
         }
         if (!qrText && nativeDetector) {
           try {
             const codes = await nativeDetector.detect(video);
-            if (codes.length > 0 && codes[0].rawValue) qrText = codes[0].rawValue;
+            if (codes.length > 0 && codes[0].rawValue) qrText = codes[0].rawValue.trim();
           } catch (_) {}
         }
         if (qrText) {
           document.getElementById(targetInputId).value = qrText;
           stopCameraQrScanner();
-          showToast('扫码成功，正在自动提交签到...');
-          if (prefix === 'help') submitHelperSign();
+          showToast("扫码成功，正在自动提交签到...");
+          if (prefix === "help") submitHelperSign();
           else submitManualSign();
           return;
         }
@@ -3049,43 +3103,180 @@ async function toggleCameraQrScanner(prefix = 'manual') {
     _camScanRaf = requestAnimationFrame(scanTick);
   } catch (err) {
     stopCameraQrScanner();
-    showToast('无法访问摄像头权限，请使用右侧「拍照/上传图片」');
+    showToast("无法直接调起摄像头，请使用右侧「拍照/相册识别」");
   }
+}
+
+function loadFileAsImageElement(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = reader.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function binarizeImageDataInPlace(imgData, factor = 1.0) {
+  const d = imgData.data;
+  const n = imgData.width * imgData.height;
+  let sum = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    sum += (d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8;
+  }
+  const thresh = (sum / Math.max(1, n)) * factor;
+  for (let i = 0; i < d.length; i += 4) {
+    const lum = (d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8;
+    const v = lum < thresh ? 0 : 255;
+    d[i] = v;
+    d[i + 1] = v;
+    d[i + 2] = v;
+    d[i + 3] = 255;
+  }
+  return imgData;
+}
+
+function tryClientCanvasQrDecode(source, srcW, srcH) {
+  if (typeof window.jsQR !== "function") return null;
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  const maxSide = Math.max(srcW, srcH);
+
+  // 1. 多分辨率 + 白边静区（Quiet Zone）扫描
+  const targetMaxList = [1000, 640, 1440, 440, maxSide];
+  const tried = new Set();
+  for (const targetMax of targetMaxList) {
+    const scale = targetMax >= maxSide ? 1 : targetMax / maxSide;
+    const dw = Math.max(64, Math.round(srcW * scale));
+    const dh = Math.max(64, Math.round(srcH * scale));
+    if (dw > 2200 || dh > 2200) continue;
+    const key = `${dw}x${dh}`;
+    if (tried.has(key)) continue;
+    tried.add(key);
+
+    for (const pad of [0, 28]) {
+      canvas.width = dw + pad * 2;
+      canvas.height = dh + pad * 2;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(source, 0, 0, srcW, srcH, pad, pad, dw, dh);
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      let code = window.jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: "attemptBoth" });
+      if (code && code.data) return code.data.trim();
+
+      for (const f of [1.0, 0.88, 1.12]) {
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(source, 0, 0, srcW, srcH, pad, pad, dw, dh);
+        const binData = binarizeImageDataInPlace(ctx.getImageData(0, 0, canvas.width, canvas.height), f);
+        code = window.jsQR(binData.data, binData.width, binData.height, { inversionAttempts: "dontInvert" });
+        if (code && code.data) return code.data.trim();
+      }
+    }
+  }
+
+  // 2. 局部裁剪扫描（应对手机拍摄大屏二维码占比小的情况）
+  for (const ratio of [0.75, 0.55]) {
+    const cw = Math.round(srcW * ratio);
+    const ch = Math.round(srcH * ratio);
+    for (const [fx, fy] of [[0.5, 0.5], [0.5, 0.35], [0.35, 0.5], [0.65, 0.5]]) {
+      const sx = Math.max(0, Math.min(srcW - cw, Math.round(srcW * fx - cw / 2)));
+      const sy = Math.max(0, Math.min(srcH - ch, Math.round(srcH * fy - ch / 2)));
+      const dstW = Math.min(800, cw);
+      const dstH = Math.min(800, ch);
+      canvas.width = dstW + 40;
+      canvas.height = dstH + 40;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(source, sx, sy, cw, ch, 20, 20, dstW, dstH);
+      const subData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      let code = window.jsQR(subData.data, subData.width, subData.height, { inversionAttempts: "attemptBoth" });
+      if (code && code.data) return code.data.trim();
+      const binSub = binarizeImageDataInPlace(subData, 0.95);
+      code = window.jsQR(binSub.data, binSub.width, binSub.height, { inversionAttempts: "dontInvert" });
+      if (code && code.data) return code.data.trim();
+    }
+  }
+  return null;
 }
 
 async function decodeQrImage(input, targetInputId, autoSubmit = false) {
   const file = input.files?.[0];
+  input.value = "";
   if (!file) return;
+
+  showToast("正在识别图片中的二维码...");
+  let qrText = null;
+  let imgSource = null;
+  let srcW = 0;
+  let srcH = 0;
+
   try {
-    const bmp = await createImageBitmap(file);
-    if (typeof window.jsQR === 'function') {
-      const canvas = document.createElement('canvas');
-      canvas.width = bmp.width;
-      canvas.height = bmp.height;
-      const ctx2d = canvas.getContext('2d');
-      ctx2d.drawImage(bmp, 0, 0);
-      const imgData = ctx2d.getImageData(0, 0, canvas.width, canvas.height);
-      const code = window.jsQR(imgData.data, imgData.width, imgData.height);
-      if (code && code.data) {
-        document.getElementById(targetInputId).value = code.data;
-        showToast('二维码解析成功');
-        if (autoSubmit) submitHelperSign();
-        return;
-      }
+    if (typeof createImageBitmap === "function") {
+      try {
+        const bmp = await createImageBitmap(file);
+        imgSource = bmp;
+        srcW = bmp.width;
+        srcH = bmp.height;
+      } catch (_) {}
     }
-    if ('BarcodeDetector' in window) {
-      const det = new BarcodeDetector({ formats: ['qr_code'] });
-      const codes = await det.detect(bmp);
-      if (codes.length > 0 && codes[0].rawValue) {
-        document.getElementById(targetInputId).value = codes[0].rawValue;
-        showToast('二维码解析成功');
-        if (autoSubmit) submitHelperSign();
-        return;
+    if (!imgSource) {
+      const imgEl = await loadFileAsImageElement(file);
+      imgSource = imgEl;
+      srcW = imgEl.naturalWidth || imgEl.width;
+      srcH = imgEl.naturalHeight || imgEl.height;
+    }
+
+    if (imgSource && srcW > 0 && srcH > 0) {
+      qrText = tryClientCanvasQrDecode(imgSource, srcW, srcH);
+
+      if (!qrText && "BarcodeDetector" in window) {
+        try {
+          const det = new BarcodeDetector({ formats: ["qr_code"] });
+          const codes = await det.detect(imgSource);
+          if (codes.length > 0 && codes[0].rawValue) {
+            qrText = codes[0].rawValue.trim();
+          }
+        } catch (_) {}
+      }
+
+      // 3. 后端高精度多尺度自适应阈值兜底识别（彻底解决复杂光线、摩尔纹或前端解码失败）
+      if (!qrText) {
+        try {
+          const upCanvas = document.createElement("canvas");
+          const maxUp = 1280;
+          const upScale = Math.max(srcW, srcH) > maxUp ? maxUp / Math.max(srcW, srcH) : 1;
+          upCanvas.width = Math.max(64, Math.round(srcW * upScale));
+          upCanvas.height = Math.max(64, Math.round(srcH * upScale));
+          const upCtx = upCanvas.getContext("2d");
+          upCtx.fillStyle = "#ffffff";
+          upCtx.fillRect(0, 0, upCanvas.width, upCanvas.height);
+          upCtx.drawImage(imgSource, 0, 0, upCanvas.width, upCanvas.height);
+          const dataUrl = upCanvas.toDataURL("image/jpeg", 0.9);
+          const resp = await api("/api/qr/decode", "POST", { base64Image: dataUrl });
+          if (resp && resp.ok && resp.qrText) {
+            qrText = String(resp.qrText).trim();
+          }
+        } catch (_) {}
       }
     }
   } catch (_) {}
-  showToast('未识别到清晰二维码，请重试或直接粘贴内容');
+
+  if (qrText) {
+    const targetEl = document.getElementById(targetInputId);
+    if (targetEl) targetEl.value = qrText;
+    if (autoSubmit || targetInputId === "helpQrUrl") {
+      showToast("二维码解析成功，正在自动提交签到...");
+      submitHelperSign();
+    } else {
+      showToast("二维码解析成功，已填入签到框");
+    }
+    return;
+  }
+
+  showToast("未识别到清晰二维码，请尽量截取二维码区域后重试");
 }
-
-
-

@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <link rel="stylesheet" href="style.css?v=8" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+  <script src="jsqr.js?v=9"></script>
 </head>
 <body>
 <div id="toast" class="toast"></div>
@@ -57,7 +57,7 @@
           <button type="button" class="btn btn-sm" id="helpCamBtn" onclick="toggleCameraQrScanner('help')">打开相机扫码</button>
           <label class="btn btn-ghost btn-sm" style="margin:0; cursor:pointer;">
             拍照/相册识别
-            <input type="file" accept="image/*" capture="environment" style="display:none;" onchange="decodeQrImage(this, 'helpQrUrl', true)" />
+            <input type="file" accept="image/*" style="display:none;" onchange="decodeQrImage(this, 'helpQrUrl', true)" />
           </label>
         </div>
         <div id="helpCamStage" style="display:none; position:relative; width:100%; max-width:340px; margin:0 auto 10px; border:1px solid var(--border); border-radius:8px; overflow:hidden; background:#000;">
@@ -711,7 +711,7 @@
         <button type="button" class="btn btn-sm" id="manualCamBtn" onclick="toggleCameraQrScanner('manual')">打开相机扫码</button>
         <label class="btn btn-ghost btn-sm" style="margin:0; cursor:pointer;">
           拍照/上传图片
-          <input type="file" accept="image/*" capture="environment" style="display:none;" onchange="decodeQrImage(this, 'manualQrUrl', false)" />
+          <input type="file" accept="image/*" style="display:none;" onchange="decodeQrImage(this, 'manualQrUrl', false)" />
         </label>
       </div>
       <div id="manualCamStage" style="display:none; position:relative; width:100%; max-width:340px; margin:0 auto 10px; border:1px solid var(--border); border-radius:8px; overflow:hidden; background:#000;">

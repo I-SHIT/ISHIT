@@ -16,6 +16,7 @@ const {
 } = require('./index.js');
 const { CXProtocol } = require('./protocol.js');
 const {
+  decodeQrFromImageBuffer,
   broadcastNapCat,
   createHelperSession,
   getHelperSession,
@@ -172,7 +173,7 @@ function canSessionEditCxAccount(sess, targetUid) {
 }
 
 function isHelperAuthorizedRoute(req, pathname, parsedUrl) {
-  if (pathname === '/api/napcat/webhook_image') return true;
+  if (pathname === '/api/napcat/webhook_image' || pathname === '/api/qr/decode') return true;
   if (pathname === '/api/helper/info' || pathname === '/api/helper/submit') return true;
   const hToken = req.headers['x-helper-token'] || parsedUrl.searchParams.get('helperToken') || '';
   if (!hToken) return false;
@@ -1365,12 +1366,13 @@ const server = http.createServer(async (req, res) => {
         creatorUsername: currentSess?.username || ensurePanelAuthStore().username || 'ishit',
         creatorRole: currentSess?.role || 'admin',
       });
-      let rawPublicBase = String(store.napcat?.publicBaseUrl || 'http://ishit.pw').trim();
+      let rawPublicBase = String(store.napcat?.publicBaseUrl || 'https://ishit.pw').trim();
       if (!rawPublicBase || /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/.*)?$/i.test(rawPublicBase)) {
-        rawPublicBase = 'http://ishit.pw';
+        rawPublicBase = 'https://ishit.pw';
       } else if (!/^https?:\/\//i.test(rawPublicBase)) {
-        rawPublicBase = `http://${rawPublicBase}`;
+        rawPublicBase = `https://${rawPublicBase}`;
       }
+      rawPublicBase = rawPublicBase.replace(/^http:\/\/ishit\.pw\b/i, 'https://ishit.pw');
       const base = rawPublicBase.replace(/\/+$/, '');
       const shareUrl = `${base}/?help=${hs.token}`;
 
@@ -1498,8 +1500,9 @@ const server = http.createServer(async (req, res) => {
       const body = await readBodyJson(req);
       if (body.publicBaseUrl !== undefined) {
         let pb = String(body.publicBaseUrl || '').trim();
-        if (!pb) pb = 'http://ishit.pw';
-        else if (!/^https?:\/\//i.test(pb)) pb = `http://${pb}`;
+        if (!pb) pb = 'https://ishit.pw';
+        else if (!/^https?:\/\//i.test(pb)) pb = `https://${pb}`;
+        pb = pb.replace(/^http:\/\/ishit\.pw\b/i, 'https://ishit.pw');
         body.publicBaseUrl = pb.replace(/\/+$/, '');
       }
       store.napcat = { ...store.napcat, ...body };
@@ -1514,6 +1517,15 @@ const server = http.createServer(async (req, res) => {
       const msg = `[学习通控制端] NapCat 连通测试成功 (${new Date().toLocaleTimeString('zh-CN', { hour12: false })})`;
       const result = await broadcastNapCat(msg, { force: true, eventType: 'test' });
       return sendJson(res, { ok: result.sent, ...result });
+    }
+
+    if (pathname === '/api/qr/decode' && req.method === 'POST') {
+      const body = await readBodyJson(req);
+      const rawB64 = String(body.base64Image || body.image || '').replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, '');
+      if (!rawB64) return sendJson(res, { ok: false, msg: '未收到图片数据' });
+      const buf = Buffer.from(rawB64, 'base64');
+      const qrText = decodeQrFromImageBuffer(buf);
+      return sendJson(res, { ok: Boolean(qrText), qrText: qrText || null });
     }
 
     if (pathname === '/api/napcat/webhook_image' && req.method === 'POST') {

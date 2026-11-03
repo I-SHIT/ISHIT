@@ -48,21 +48,34 @@ function fetchRawBuffer(urlStr, timeoutMs = 8000) {
   });
 }
 
-function downsampleRgba(src, srcW, srcH, step) {
-  const dstW = Math.max(1, Math.floor(srcW / step));
-  const dstH = Math.max(1, Math.floor(srcH / step));
-  const dst = new Uint8ClampedArray(dstW * dstH * 4);
-  for (let y = 0; y < dstH; y++) {
-    const sy = y * step;
-    for (let x = 0; x < dstW; x++) {
-      const sx = x * step;
+function resizeRgbaNearest(src, srcW, srcH, dstW, dstH) {
+  const w = Math.max(1, Math.round(dstW));
+  const h = Math.max(1, Math.round(dstH));
+  const dst = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    const sy = Math.min(srcH - 1, Math.floor((y * srcH) / h));
+    for (let x = 0; x < w; x++) {
+      const sx = Math.min(srcW - 1, Math.floor((x * srcW) / w));
       const sOff = (sy * srcW + sx) * 4;
-      const dOff = (y * dstW + x) * 4;
+      const dOff = (y * w + x) * 4;
       dst[dOff] = src[sOff];
       dst[dOff + 1] = src[sOff + 1];
       dst[dOff + 2] = src[sOff + 2];
       dst[dOff + 3] = 255;
     }
+  }
+  return { rgba: dst, width: w, height: h };
+}
+
+function addWhiteBorderRgba(src, srcW, srcH, pad = 28) {
+  const dstW = srcW + pad * 2;
+  const dstH = srcH + pad * 2;
+  const dst = new Uint8ClampedArray(dstW * dstH * 4);
+  dst.fill(255);
+  for (let y = 0; y < srcH; y++) {
+    const srcRow = y * srcW * 4;
+    const dstRow = ((y + pad) * dstW + pad) * 4;
+    dst.set(src.subarray(srcRow, srcRow + srcW * 4), dstRow);
   }
   return { rgba: dst, width: dstW, height: dstH };
 }
@@ -107,6 +120,76 @@ function binarizeRgba(src, w, h, factor = 1.0) {
   return { rgba: dst, width: w, height: h };
 }
 
+function adaptiveBinarizeRgba(src, w, h, radius = 14, offset = 7) {
+  const n = w * h;
+  const lum = new Uint8Array(n);
+  const integral = new Int32Array((w + 1) * (h + 1));
+  for (let y = 0; y < h; y++) {
+    let rowSum = 0;
+    for (let x = 0; x < w; x++) {
+      const idx = y * w + x;
+      const o = idx * 4;
+      const v = (src[o] * 77 + src[o + 1] * 150 + src[o + 2] * 29) >> 8;
+      lum[idx] = v;
+      rowSum += v;
+      integral[(y + 1) * (w + 1) + (x + 1)] = integral[y * (w + 1) + (x + 1)] + rowSum;
+    }
+  }
+  const dst = new Uint8ClampedArray(n * 4);
+  for (let y = 0; y < h; y++) {
+    const y1 = Math.max(0, y - radius);
+    const y2 = Math.min(h - 1, y + radius);
+    for (let x = 0; x < w; x++) {
+      const x1 = Math.max(0, x - radius);
+      const x2 = Math.min(w - 1, x + radius);
+      const count = (x2 - x1 + 1) * (y2 - y1 + 1);
+      const sum =
+        integral[(y2 + 1) * (w + 1) + (x2 + 1)] -
+        integral[y1 * (w + 1) + (x2 + 1)] -
+        integral[(y2 + 1) * (w + 1) + x1] +
+        integral[y1 * (w + 1) + x1];
+      const idx = y * w + x;
+      const c = lum[idx] * count < sum - offset * count ? 0 : 255;
+      const o = idx * 4;
+      dst[o] = c;
+      dst[o + 1] = c;
+      dst[o + 2] = c;
+      dst[o + 3] = 255;
+    }
+  }
+  return { rgba: dst, width: w, height: h };
+}
+
+function tryJsQrVariants(imgObj, includeAdaptive = true) {
+  if (!imgObj || !imgObj.rgba || imgObj.width < 32 || imgObj.height < 32) return null;
+  let qr = jsQR(imgObj.rgba, imgObj.width, imgObj.height, { inversionAttempts: "attemptBoth" });
+  if (qr && qr.data) return qr.data.trim();
+
+  // 加白边静区（解决紧贴二维码边缘截图无 Quiet Zone 无法定位 Finder Pattern 的问题）
+  const pad = Math.max(16, Math.round(Math.min(imgObj.width, imgObj.height) * 0.08));
+  const padded = addWhiteBorderRgba(imgObj.rgba, imgObj.width, imgObj.height, pad);
+  qr = jsQR(padded.rgba, padded.width, padded.height, { inversionAttempts: "attemptBoth" });
+  if (qr && qr.data) return qr.data.trim();
+
+  // 局部积分图自适应阈值二值化（解决投影仪/屏幕偏色、反光、阴影不均）
+  if (includeAdaptive) {
+    const rad = Math.max(8, Math.round(Math.min(padded.width, padded.height) / 28));
+    for (const off of [7, 2]) {
+      const adap = adaptiveBinarizeRgba(padded.rgba, padded.width, padded.height, rad, off);
+      qr = jsQR(adap.rgba, adap.width, adap.height, { inversionAttempts: "dontInvert" });
+      if (qr && qr.data) return qr.data.trim();
+    }
+  }
+
+  // 全局均值阈值二值化
+  for (const f of [1.0, 0.88, 1.12]) {
+    const bin = binarizeRgba(padded.rgba, padded.width, padded.height, f);
+    qr = jsQR(bin.rgba, bin.width, bin.height, { inversionAttempts: "dontInvert" });
+    if (qr && qr.data) return qr.data.trim();
+  }
+  return null;
+}
+
 function decodeQrFromImageBuffer(buf) {
   if (!Buffer.isBuffer(buf) || buf.length < 16) return null;
   try {
@@ -114,7 +197,7 @@ function decodeQrFromImageBuffer(buf) {
     let height = 0;
     let rgba = null;
     if (buf[0] === 0xff && buf[1] === 0xd8) {
-      const decoded = jpeg.decode(buf, { useTArray: true, maxResolutionInMP: 36, maxMemoryUsageInMB: 384 });
+      const decoded = jpeg.decode(buf, { useTArray: true, maxResolutionInMP: 48, maxMemoryUsageInMB: 512 });
       width = decoded.width;
       height = decoded.height;
       rgba = new Uint8ClampedArray(decoded.data.buffer, decoded.data.byteOffset, decoded.data.byteLength);
@@ -125,7 +208,7 @@ function decodeQrFromImageBuffer(buf) {
       rgba = new Uint8ClampedArray(decoded.data.buffer, decoded.data.byteOffset, decoded.data.byteLength);
     } else {
       try {
-        const decoded = jpeg.decode(buf, { useTArray: true, maxResolutionInMP: 36, maxMemoryUsageInMB: 384 });
+        const decoded = jpeg.decode(buf, { useTArray: true, maxResolutionInMP: 48, maxMemoryUsageInMB: 512 });
         width = decoded.width;
         height = decoded.height;
         rgba = new Uint8ClampedArray(decoded.data.buffer, decoded.data.byteOffset, decoded.data.byteLength);
@@ -133,46 +216,42 @@ function decodeQrFromImageBuffer(buf) {
     }
     if (!rgba || !width || !height) return null;
 
-    // 1. 原图直接识别 (attemptBoth 支持反色屏幕拍照)
-    let qr = jsQR(rgba, width, height, { inversionAttempts: 'attemptBoth' });
-    if (qr && qr.data) return qr.data.trim();
-
-    // 2. 高清大图降采样识别（手机拍摄大屏二维码摩尔纹/模糊时，2x/3x/4x 降采样识别率大幅提升）
-    for (const step of [2, 3, 4]) {
-      if (width / step >= 180 && height / step >= 180) {
-        const sub = downsampleRgba(rgba, width, height, step);
-        qr = jsQR(sub.rgba, sub.width, sub.height, { inversionAttempts: 'attemptBoth' });
-        if (qr && qr.data) return qr.data.trim();
-        for (const f of [1.0, 0.88, 1.12]) {
-          const bin = binarizeRgba(sub.rgba, sub.width, sub.height, f);
-          qr = jsQR(bin.rgba, bin.width, bin.height, { inversionAttempts: 'dontInvert' });
-          if (qr && qr.data) return qr.data.trim();
-        }
-      }
+    // 1. 多尺度归一化识别（覆盖高清原图、中等尺寸、抗摩尔纹降采样、以及小尺寸放大）
+    const maxSide = Math.max(width, height);
+    const targetMaxSides = [840, 540, 1200, 360];
+    if (maxSide <= 1400) targetMaxSides.unshift(maxSide);
+    const seenScales = new Set();
+    for (const targetMax of targetMaxSides) {
+      const scale = targetMax === maxSide ? 1 : targetMax / maxSide;
+      const rw = Math.max(64, Math.round(width * scale));
+      const rh = Math.max(64, Math.round(height * scale));
+      const key = `${rw}x${rh}`;
+      if (seenScales.has(key) || rw > 1600 || rh > 1600) continue;
+      seenScales.add(key);
+      const scaled = rw === width && rh === height
+        ? { rgba, width, height }
+        : resizeRgbaNearest(rgba, width, height, rw, rh);
+      const hit = tryJsQrVariants(scaled, true);
+      if (hit) return hit;
     }
 
-    // 3. 多尺度滑窗裁剪 + 亮度均值二值化（针对手机拍电脑/投影屏幕存在蓝光偏色、摩尔纹、二维码偏角或占比较小的情况）
-    const side = Math.min(width, height);
-    if (side >= 320) {
-      for (const s of [0.85, 0.70, 0.55, 0.42]) {
+    // 2. 局部裁剪识别（针对手机远拍大屏、二维码在画面局部区域的情况）
+    const workMax = 960;
+    const baseImg = maxSide > workMax
+      ? resizeRgbaNearest(rgba, width, height, Math.round((width * workMax) / maxSide), Math.round((height * workMax) / maxSide))
+      : { rgba, width, height };
+    const side = Math.min(baseImg.width, baseImg.height);
+    if (side >= 260) {
+      for (const s of [0.72, 0.50]) {
         const cw = Math.floor(side * s);
         const ch = cw;
-        if (cw < 200) continue;
-        const fyList = s >= 0.8 ? [0.25, 0.35, 0.15, 0.45] : [0.2, 0.35, 0.5, 0.1, 0.65];
-        const fxList = s >= 0.8 ? [0.08, 0.15, 0.25] : [0.15, 0.3, 0.45, 0.05];
-        for (const fy of fyList) {
-          for (const fx of fxList) {
-            const x0 = Math.min(width - cw, Math.max(0, Math.floor(width * fx)));
-            const y0 = Math.min(height - ch, Math.max(0, Math.floor(height * fy)));
-            const patch = cropRgba(rgba, width, height, x0, y0, cw, ch);
-            qr = jsQR(patch.rgba, patch.width, patch.height, { inversionAttempts: 'dontInvert' });
-            if (qr && qr.data) return qr.data.trim();
-            for (const f of [1.0, 0.86, 1.12]) {
-              const bin = binarizeRgba(patch.rgba, patch.width, patch.height, f);
-              qr = jsQR(bin.rgba, bin.width, bin.height, { inversionAttempts: 'dontInvert' });
-              if (qr && qr.data) return qr.data.trim();
-            }
-          }
+        if (cw < 160) continue;
+        for (const [fx, fy] of [[0.5, 0.5], [0.5, 0.32], [0.32, 0.5], [0.68, 0.5]]) {
+          const x0 = Math.min(baseImg.width - cw, Math.max(0, Math.floor(baseImg.width * fx - cw / 2)));
+          const y0 = Math.min(baseImg.height - ch, Math.max(0, Math.floor(baseImg.height * fy - ch / 2)));
+          const patch = cropRgba(baseImg.rgba, baseImg.width, baseImg.height, x0, y0, cw, ch);
+          const hit = tryJsQrVariants(patch, false);
+          if (hit) return hit;
         }
       }
     }
@@ -1208,12 +1287,13 @@ async function executeSignForActive({
       targetNames: (pendingHelperUsers.length > 0 ? pendingHelperUsers : accounts).map((u) => u.name || u.uid),
       captchaKey: needCaptchaKey,
     });
-    let rawBaseUrl = String(store.napcat?.publicBaseUrl || 'http://ishit.pw').trim();
+    let rawBaseUrl = String(store.napcat?.publicBaseUrl || 'https://ishit.pw').trim();
     if (!rawBaseUrl || /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/.*)?$/i.test(rawBaseUrl)) {
-      rawBaseUrl = 'http://ishit.pw';
+      rawBaseUrl = 'https://ishit.pw';
     } else if (!/^https?:\/\//i.test(rawBaseUrl)) {
-      rawBaseUrl = `http://${rawBaseUrl}`;
+      rawBaseUrl = `https://${rawBaseUrl}`;
     }
+    rawBaseUrl = rawBaseUrl.replace(/^http:\/\/ishit\.pw\b/i, 'https://ishit.pw');
     const baseUrl = rawBaseUrl.replace(/\/+$/, '');
     helperShareUrl = `${baseUrl}/?help=${hs.token}`;
   }
@@ -1874,15 +1954,34 @@ function getNapCatRecentImagesEndpoint() {
 // 兜底：扫描本机 QQ NT 原图落地目录 (Pic/YYYY-MM/Ori) 最近收到的图片，即使 NapCat 事件漏推也能秒级捕获二维码
 function scanLocalQqNtRecentImages(sinceMs) {
   const results = [];
+  const now = new Date();
+  const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const candidateDirs = [];
+
   try {
-    const baseDir = 'D:/TencentFiles/Tencent Files';
-    if (!fs.existsSync(baseDir)) return results;
-    const now = new Date();
-    const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-    const entries = fs.readdirSync(baseDir);
-    for (const uin of entries) {
-      if (!/^\d{5,12}$/.test(uin)) continue;
-      const oriDir = `${baseDir}/${uin}/nt_qq/nt_data/Pic/${ym}/Ori`;
+    const winBase = 'D:/TencentFiles/Tencent Files';
+    if (fs.existsSync(winBase)) {
+      for (const uin of fs.readdirSync(winBase)) {
+        if (!/^\d{5,12}$/.test(uin)) continue;
+        candidateDirs.push(`${winBase}/${uin}/nt_qq/nt_data/Pic/${ym}/Ori`);
+        candidateDirs.push(`${winBase}/${uin}/nt_qq/nt_data/Emoji/emoji-recv/${ym}/Ori`);
+      }
+    }
+  } catch (_) {}
+
+  try {
+    const linuxBase = '/opt/napcat/qq';
+    if (fs.existsSync(linuxBase)) {
+      for (const entry of fs.readdirSync(linuxBase)) {
+        if (!entry.startsWith('nt_qq')) continue;
+        candidateDirs.push(`${linuxBase}/${entry}/nt_data/Pic/${ym}/Ori`);
+        candidateDirs.push(`${linuxBase}/${entry}/nt_data/Emoji/emoji-recv/${ym}/Ori`);
+      }
+    }
+  } catch (_) {}
+
+  for (const oriDir of candidateDirs) {
+    try {
       if (!fs.existsSync(oriDir)) continue;
       const files = fs.readdirSync(oriDir);
       for (const fname of files) {
@@ -1894,7 +1993,6 @@ function scanLocalQqNtRecentImages(sinceMs) {
           continue;
         }
         if (!st || !st.isFile() || st.size < 256 || st.mtimeMs < sinceMs) continue;
-        // 按文件名哈希去重（多 QQ 同群收到同一张图 MD5 文件名相同）
         const fileKey = `local_nt_${fname.toLowerCase()}`;
         if (results.some((x) => x.id === fileKey)) continue;
         results.push({
@@ -1905,8 +2003,8 @@ function scanLocalQqNtRecentImages(sinceMs) {
           timestamp: st.mtimeMs,
         });
       }
-    }
-  } catch (_) {}
+    } catch (_) {}
+  }
   return results;
 }
 
@@ -2217,10 +2315,18 @@ async function processIncomingChatImageItem(img) {
   if (!img || !img.id || processedChatImageIds.has(img.id)) return false;
   let buf = null;
   if (img.base64) {
-    buf = Buffer.from(img.base64, 'base64');
-  } else if (img.localPath && fs.existsSync(img.localPath)) {
-    buf = fs.readFileSync(img.localPath);
-  } else if (img.url && img.url.startsWith('http')) {
+    buf = Buffer.from(String(img.base64).replace(/^data:image\/\w+;base64,/, ''), 'base64');
+  }
+  if ((!buf || buf.length < 128) && img.localPath) {
+    const rawPath = String(img.localPath);
+    const mappedHostPath = rawPath.replace(/^\/app\/\.config\/QQ\b/, '/opt/napcat/qq');
+    if (fs.existsSync(rawPath)) {
+      try { buf = fs.readFileSync(rawPath); } catch (_) {}
+    } else if (mappedHostPath !== rawPath && fs.existsSync(mappedHostPath)) {
+      try { buf = fs.readFileSync(mappedHostPath); } catch (_) {}
+    }
+  }
+  if ((!buf || buf.length < 128) && img.url && img.url.startsWith('http')) {
     try {
       buf = await fetchRawBuffer(img.url);
     } catch (_) {}
@@ -2470,6 +2576,7 @@ function restartScheduler(triggerImmediate = true) {
 }
 
 module.exports = {
+  decodeQrFromImageBuffer,
   broadcastNapCat,
   createHelperSession,
   getHelperSession,

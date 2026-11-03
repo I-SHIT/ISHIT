@@ -1,4 +1,4 @@
-﻿const state = {
+const state = {
   status: null,
   selectedUid: null,
   courses: [],
@@ -34,8 +34,130 @@ function showToast(msg) {
   el._t = setTimeout(() => el.classList.remove('show'), 2600);
 }
 
+const DEFAULT_REMOTE_API_BASE = 'https://api.ishit.pw';
+const FALLBACK_DIRECT_API_BASE = 'http://47.117.27.75:8080';
+let _loadedConfigEndpoint = null;
+
+function detectPlatformType() {
+  if (window.ISHIT_PLATFORM === 'windows') return 'windows';
+  if (window.ISHIT_PLATFORM === 'android') return 'android';
+  const host = String(location.hostname || '').toLowerCase();
+  if (host === 'ishit.local') return 'windows';
+  if (host === 'appassets.androidplatform.net' || window.IshitAndroidBridge) return 'android';
+  return 'web';
+}
+
+function applyPlatformLayoutClass() {
+  const plat = detectPlatformType();
+  const root = document.documentElement;
+  root.classList.remove('platform-windows', 'platform-android', 'platform-web');
+  root.classList.add(`platform-${plat}`);
+  return plat;
+}
+
+applyPlatformLayoutClass();
+
+function isStandaloneClientEnv() {
+  const plat = detectPlatformType();
+  if (plat === 'windows' || plat === 'android') return true;
+  const proto = String(location.protocol || '').toLowerCase();
+  if (proto === 'file:' || proto === 'app:' || proto === 'capacitor:') return true;
+  if (window.ISHIT_NATIVE_CLIENT === true) return true;
+  return false;
+}
+
+function normalizeApiBaseUrl(raw) {
+  let s = String(raw || '').trim();
+  if (!s) return '';
+  if (!/^https?:\/\//i.test(s)) s = 'http://' + s;
+  return s.replace(/\/+$/, '');
+}
+
+function resolveEndpointFromConfigObj(cfg) {
+  if (!cfg || typeof cfg !== 'object') return '';
+  if (cfg.apiBaseUrl && String(cfg.apiBaseUrl).trim()) {
+    return normalizeApiBaseUrl(cfg.apiBaseUrl);
+  }
+  if (cfg.serverHost && String(cfg.serverHost).trim()) {
+    const host = String(cfg.serverHost).trim();
+    const port = cfg.serverPort ? `:${cfg.serverPort}` : '';
+    return normalizeApiBaseUrl(`${host}${port}`);
+  }
+  return '';
+}
+
+function readBridgeConfigSync() {
+  if (window.IshitAndroidBridge && typeof window.IshitAndroidBridge.getConfigJson === 'function') {
+    try {
+      const raw = window.IshitAndroidBridge.getConfigJson();
+      if (raw) {
+        const parsedObj = JSON.parse(raw);
+        window.ISHIT_CONFIG = parsedObj;
+        const ep = resolveEndpointFromConfigObj(parsedObj);
+        if (ep) return ep;
+      }
+    } catch (_) {}
+  }
+  if (window.ISHIT_CONFIG && typeof window.ISHIT_CONFIG === 'object') {
+    const fromInjected = resolveEndpointFromConfigObj(window.ISHIT_CONFIG);
+    if (fromInjected) return fromInjected;
+  }
+  return '';
+}
+
+async function loadExternalConfigJson() {
+  try {
+    localStorage.removeItem('ishit_api_base_url');
+  } catch (_) {}
+
+  const syncEp = readBridgeConfigSync();
+  if (syncEp) {
+    _loadedConfigEndpoint = syncEp;
+    return _loadedConfigEndpoint;
+  }
+
+  try {
+    const res = await fetch(`config.json?_t=${Date.now()}`, { cache: 'no-store' });
+    if (res.ok) {
+      const cfg = await res.json();
+      let parsed = resolveEndpointFromConfigObj(cfg);
+      // 若当前页面在 HTTPS (如 GitHub Pages https://ishit.pw) 下打开，而配置填写了裸 HTTP，优先升级到 httpsApiBaseUrl 防止 Mixed Content 拦截
+      if (location.protocol === 'https:' && parsed.startsWith('http://') && cfg.httpsApiBaseUrl) {
+        parsed = normalizeApiBaseUrl(cfg.httpsApiBaseUrl);
+      }
+      if (parsed) {
+        _loadedConfigEndpoint = parsed;
+        return _loadedConfigEndpoint;
+      }
+    }
+  } catch (_) {}
+  _loadedConfigEndpoint = location.protocol === 'https:' ? DEFAULT_REMOTE_API_BASE : FALLBACK_DIRECT_API_BASE;
+  return _loadedConfigEndpoint;
+}
+
+function getApiBaseUrl() {
+  const syncEp = readBridgeConfigSync();
+  if (syncEp) return syncEp;
+  if (_loadedConfigEndpoint) {
+    return _loadedConfigEndpoint;
+  }
+  if (isStandaloneClientEnv()) {
+    return DEFAULT_REMOTE_API_BASE;
+  }
+  return '';
+}
+
+function syncApiEndpointUi() {}
+
 async function api(url, method = 'GET', body = null) {
-  const opts = { method, headers: {}, credentials: 'same-origin' };
+  const base = getApiBaseUrl();
+  const fullUrl = /^https?:\/\//i.test(url) ? url : (base ? base + url : url);
+  const isCrossOrigin = Boolean(base && (!location.origin || base !== location.origin));
+  const opts = {
+    method,
+    headers: {},
+    credentials: isCrossOrigin ? 'omit' : 'same-origin',
+  };
   const savedToken = localStorage.getItem('ishit_panel_token');
   if (savedToken) opts.headers['X-Panel-Token'] = savedToken;
   if (state.helperToken) opts.headers['X-Helper-Token'] = state.helperToken;
@@ -43,7 +165,20 @@ async function api(url, method = 'GET', body = null) {
     opts.headers['Content-Type'] = 'application/json';
     opts.body = JSON.stringify(body);
   }
-  const res = await fetch(url, opts);
+  let res;
+  try {
+    res = await fetch(fullUrl, opts);
+  } catch (err) {
+    // 若在原生客户端 (Windows/Android) 或非 HTTPS 环境下域名尚未生效，自动无缝回退至云服务器 IP 端口直连
+    const fallbackBase = (window.ISHIT_CONFIG && window.ISHIT_CONFIG.directIpUrl) || FALLBACK_DIRECT_API_BASE;
+    if (fallbackBase && base !== fallbackBase && (isStandaloneClientEnv() || location.protocol !== 'https:')) {
+      _loadedConfigEndpoint = normalizeApiBaseUrl(fallbackBase);
+      const retryUrl = /^https?:\/\//i.test(url) ? url : (_loadedConfigEndpoint + url);
+      res = await fetch(retryUrl, { ...opts, credentials: 'omit' });
+    } else {
+      throw err;
+    }
+  }
   const data = await res.json();
   if (res.status === 401 && data && data.needAuth && !state.helperToken) {
     showPanelLoginScreen();
@@ -78,7 +213,13 @@ function copyText(inputId) {
   const el = document.getElementById(inputId);
   if (!el) return;
   el.select();
-  navigator.clipboard?.writeText(el.value);
+  if (window.IshitAndroidBridge && typeof window.IshitAndroidBridge.copyToClipboard === 'function') {
+    window.IshitAndroidBridge.copyToClipboard(el.value);
+  } else if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(el.value).catch(() => document.execCommand('copy'));
+  } else {
+    document.execCommand('copy');
+  }
   showToast('已复制');
 }
 
@@ -132,11 +273,17 @@ function applyPanelRolePermissionsUi(panelAuth) {
   state.panelUsername = username;
   const isAdmin = role === 'admin';
 
-  // 顶部当前网站用户与角色标签
+  // 顶部与 Windows 侧边栏当前网站用户与角色标签
+  const badgeText = username ? `${username} (${isAdmin ? 'Admin' : 'User'})` : '';
   const userBadge = document.getElementById('currentPanelUserBadge');
   if (userBadge) {
-    userBadge.textContent = username ? `${username} (${isAdmin ? 'Admin' : 'User'})` : '';
+    userBadge.textContent = badgeText;
     userBadge.style.display = username ? 'inline-flex' : 'none';
+  }
+  const winUserBadge = document.getElementById('winSidebarPanelUserBadge');
+  if (winUserBadge) {
+    winUserBadge.textContent = badgeText;
+    winUserBadge.style.display = username ? 'inline-flex' : 'none';
   }
 
   // 1. User 与 Admin 均显示【仪表盘】（User 仅看自身账号签到记录与相关日志）；User 隐藏【系统设置 -> NapCat 推送】
@@ -145,6 +292,8 @@ function applyPanelRolePermissionsUi(panelAuth) {
 
   const tabNapcat = document.getElementById('settingsTabNapcat');
   if (tabNapcat) tabNapcat.style.display = isAdmin ? '' : 'none';
+  const winTabNapcat = document.getElementById('winSettingsTabNapcat');
+  if (winTabNapcat) winTabNapcat.style.display = isAdmin ? '' : 'none';
   const paneNapcat = document.getElementById('settings-pane-napcat');
   if (!isAdmin && paneNapcat) paneNapcat.style.display = 'none';
 
@@ -207,6 +356,15 @@ function switchMainModule(mod) {
   document.querySelectorAll('#mainModuleTabs .tab-btn').forEach((b) => {
     b.classList.toggle('active', b.getAttribute('data-main') === mod);
   });
+  document.querySelectorAll('#winDesktopSidebar .win-nav-item').forEach((b) => {
+    b.classList.toggle('active', b.getAttribute('data-main') === mod);
+  });
+  document.querySelectorAll('#androidBottomNav .android-tab-item').forEach((b) => {
+    b.classList.toggle('active', b.getAttribute('data-main') === mod);
+  });
+  const scroller = document.querySelector('#adminApp .app-content-scroll');
+  if (scroller) scroller.scrollTop = 0;
+
   const hintEl = document.getElementById('moduleScopeHint');
   if (hintEl) {
     if (mod === 'global') {
@@ -230,6 +388,9 @@ function switchUserSubTab(sub) {
   document.querySelectorAll('#userSubTabs .tab-btn').forEach((b) => {
     b.classList.toggle('active', b.getAttribute('data-sub') === sub);
   });
+  document.querySelectorAll('#winSubNavUser .win-subnav-item').forEach((b) => {
+    b.classList.toggle('active', b.getAttribute('data-sub') === sub);
+  });
   if (sub === 'user-location') {
     setTimeout(() => initMainLeafletMap(), 80);
   }
@@ -244,6 +405,9 @@ function switchSettingsSubTab(sub) {
   const target = document.getElementById(`settings-pane-${sub}`);
   if (target) target.style.display = 'block';
   document.querySelectorAll('#settingsSubTabs .tab-btn').forEach((b) => {
+    b.classList.toggle('active', b.getAttribute('data-sub') === sub);
+  });
+  document.querySelectorAll('#winSubNavSettings .win-subnav-item').forEach((b) => {
     b.classList.toggle('active', b.getAttribute('data-sub') === sub);
   });
 }
@@ -269,19 +433,21 @@ function switchTab(tab) {
 }
 
 function showPanelLoginScreen() {
+  applyPlatformLayoutClass();
   if (state.statusPollTimer) {
     clearInterval(state.statusPollTimer);
     state.statusPollTimer = null;
   }
   document.getElementById('adminApp').style.display = 'none';
   document.getElementById('helperApp').style.display = 'none';
-  document.getElementById('panelLoginApp').style.display = 'block';
+  document.getElementById('panelLoginApp').style.display = '';
 }
 
 function enterAdminPanel() {
+  applyPlatformLayoutClass();
   document.getElementById('panelLoginApp').style.display = 'none';
   document.getElementById('helperApp').style.display = 'none';
-  document.getElementById('adminApp').style.display = 'block';
+  document.getElementById('adminApp').style.display = '';
   refreshStatus(true);
   if (state.statusPollTimer) clearInterval(state.statusPollTimer);
   state.statusPollTimer = setInterval(() => refreshStatus(false), 5000);
@@ -303,7 +469,7 @@ async function submitPanelLogin() {
     state.selectedUid = null;
     document.getElementById('panelAuthPassword').value = '';
     if (errEl) errEl.textContent = '登录成功';
-    showToast('已登录控制面板');
+    showToast('已登录 ISHIT');
     enterAdminPanel();
   } else {
     if (errEl) errEl.textContent = res.msg || '账号或密码错误';
@@ -462,6 +628,8 @@ async function savePanelAuthCredentials() {
 }
 
 window.addEventListener('DOMContentLoaded', async () => {
+  applyPlatformLayoutClass();
+  await loadExternalConfigJson();
   initPatternGrid('manualPatternGrid', 'manualSignCode');
   initPatternGrid('helpPatternGrid', 'helpSignCode');
 
@@ -535,19 +703,20 @@ function renderTopStatus(data) {
 }
 
 function renderUserSwitcher(data) {
-  const sel = document.getElementById('globalUserSelect');
-  if (!sel) return;
   const accounts = data.accounts || [];
-  if (accounts.length === 0) {
-    sel.innerHTML = `<option value="">未登录账号</option>`;
-    return;
-  }
-  sel.innerHTML = accounts
-    .map((a) => {
-      const ownerTag = a.ownerUsername ? ` · 归属:${a.ownerUsername}` : '';
-      return `<option value="${escapeHtml(a.uid)}" ${a.uid === state.selectedUid ? 'selected' : ''}>${escapeHtml(a.name)} (${escapeHtml(a.uid)}${escapeHtml(ownerTag)})</option>`;
-    })
-    .join('');
+  const html =
+    accounts.length === 0
+      ? `<option value="">未登录账号</option>`
+      : accounts
+          .map((a) => {
+            const ownerTag = a.ownerUsername ? ` · 归属:${a.ownerUsername}` : '';
+            return `<option value="${escapeHtml(a.uid)}" ${a.uid === state.selectedUid ? 'selected' : ''}>${escapeHtml(a.name)} (${escapeHtml(a.uid)}${escapeHtml(ownerTag)})</option>`;
+          })
+          .join('');
+  const sel = document.getElementById('globalUserSelect');
+  if (sel) sel.innerHTML = html;
+  const winSel = document.getElementById('winSidebarUserSelect');
+  if (winSel) winSel.innerHTML = html;
 }
 
 function renderOverview(data, syncInputs) {
@@ -2324,7 +2493,7 @@ function populateNapCatInputs(nc) {
   document.getElementById('napEnabled').checked = Boolean(nc.enabled);
   document.getElementById('napHttpUrl').value = nc.httpUrl || 'http://127.0.0.1:6099/plugin/napcat-plugin-qce/api';
   document.getElementById('napToken').value = nc.accessToken || '';
-  document.getElementById('napPublicUrl').value = nc.publicBaseUrl || location.origin;
+  document.getElementById('napPublicUrl').value = nc.publicBaseUrl || 'https://ishit.pw';
   state.napcatGroups = (nc.groups || nc.groupIds || []).map((g) => String(g).trim()).filter(Boolean);
   state.napcatPrivates = (nc.privateUsers || nc.privateIds || []).map((u) => String(u).trim()).filter(Boolean);
   renderNapCatGroupsList(state.napcatGroups);
@@ -2906,3 +3075,6 @@ async function decodeQrImage(input, targetInputId, autoSubmit = false) {
   } catch (_) {}
   showToast('未识别到清晰二维码，请重试或直接粘贴内容');
 }
+
+
+

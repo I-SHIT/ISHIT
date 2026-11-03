@@ -1,0 +1,1336 @@
+:root {
+  --bg: #fafafa;
+  --surface: #ffffff;
+  --surface-sub: #f4f4f5;
+  --border: #e4e4e7;
+  --border-strong: #d4d4d8;
+  --text: #09090b;
+  --muted: #71717a;
+  --accent: #18181b;
+  --accent-fg: #ffffff;
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+.layout {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 28px 24px 64px;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding-bottom: 20px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+.title-group {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.brand-logo {
+  height: 36px;
+  width: auto;
+  display: block;
+  object-fit: contain;
+  user-select: none;
+}
+
+.brand-logo-login {
+  height: 32px;
+}
+
+.title-group h1 {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.status-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  background: var(--surface);
+}
+
+.status-dot::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #a1a1aa;
+  transition: background 0.3s var(--ease);
+}
+
+.status-dot.active {
+  color: var(--text);
+  border-color: var(--text);
+}
+
+.status-dot.active::before {
+  background: var(--text);
+}
+
+.nav-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.tabs {
+  display: inline-flex;
+  background: var(--surface-sub);
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.tab-btn {
+  padding: 6px 16px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.22s var(--ease);
+}
+
+.tab-btn:hover {
+  color: var(--text);
+}
+
+.tab-btn.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.user-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.user-switcher select {
+  width: auto;
+  min-width: 150px;
+  padding: 5px 10px;
+}
+
+.pane {
+  animation: fadeSlide 0.28s var(--ease);
+}
+
+@keyframes fadeSlide {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 16px;
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px;
+  margin-bottom: 16px;
+  transition: border-color 0.2s var(--ease);
+}
+
+.panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--surface-sub);
+}
+
+.panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.list-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  background: var(--surface);
+  transition: transform 0.18s var(--ease), border-color 0.18s var(--ease);
+}
+
+.list-row:hover {
+  border-color: var(--border-strong);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.18s var(--ease);
+  white-space: nowrap;
+}
+
+.btn:hover {
+  opacity: 0.86;
+}
+
+.btn:active {
+  transform: scale(0.98);
+}
+
+.btn-ghost {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.btn-ghost:hover {
+  border-color: var(--text);
+  opacity: 1;
+}
+
+.btn-sm {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+input, select, textarea {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.18s var(--ease);
+}
+
+input:focus, select:focus, textarea:focus {
+  border-color: var(--text);
+}
+
+label {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin: 10px 0 4px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tag {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 11px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface-sub);
+  color: var(--text);
+}
+
+.tag.solid {
+  background: var(--text);
+  color: var(--surface);
+  border-color: var(--text);
+}
+
+.tag.muted {
+  color: var(--muted);
+}
+
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background: var(--border-strong);
+  border-radius: 20px;
+  transition: 0.22s var(--ease);
+}
+
+.slider::before {
+  content: "";
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  left: 3px;
+  bottom: 3px;
+  background: #fff;
+  border-radius: 50%;
+  transition: 0.22s var(--ease);
+}
+
+input:checked + .slider {
+  background: var(--text);
+}
+
+input:checked + .slider::before {
+  transform: translateX(16px);
+}
+
+.log-stream {
+  height: 240px;
+  overflow-y: auto;
+  background: var(--surface-sub);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--text);
+}
+
+/* 弹窗动效 */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(9, 9, 11, 0.45);
+  backdrop-filter: blur(2px);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 16px;
+}
+
+.backdrop.open {
+  display: flex;
+  animation: fadeIn 0.18s var(--ease);
+}
+
+#mapPickerModal {
+  z-index: 1200;
+}
+
+#slideCaptchaModal {
+  z-index: 1300;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.dialog {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  width: 100%;
+  max-width: 540px;
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 20px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.12);
+  animation: scaleUp 0.22s var(--ease);
+}
+
+@keyframes scaleUp {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* 九宫格手势 */
+.pattern-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 54px);
+  gap: 10px;
+  justify-content: center;
+  margin: 10px 0;
+  user-select: none;
+}
+
+.pattern-dot {
+  width: 54px;
+  height: 54px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s var(--ease);
+}
+
+.pattern-dot.selected {
+  background: var(--text);
+  color: var(--surface);
+  border-color: var(--text);
+}
+
+/* 课表矩阵 */
+.timetable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.timetable th, .timetable td {
+  border: 1px solid var(--border);
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.timetable th {
+  background: var(--surface-sub);
+  font-weight: 500;
+  color: var(--muted);
+}
+
+/* 滑块验证码组件 */
+.captcha-stage {
+  position: relative;
+  width: 320px;
+  height: 160px;
+  margin: 0 auto;
+  background: var(--surface-sub);
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  user-select: none;
+}
+
+.captcha-bg {
+  width: 320px;
+  height: 160px;
+  display: block;
+}
+
+.captcha-cutout {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 56px;
+  height: 160px;
+  pointer-events: none;
+}
+
+.captcha-slider-wrap {
+  width: 320px;
+  margin: 10px auto 0;
+}
+
+.day-chip {
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--muted);
+  background: var(--surface);
+}
+
+.day-chip.active {
+  background: var(--text);
+  color: var(--surface);
+  border-color: var(--text);
+}
+
+.map-canvas {
+  width: 100%;
+  height: 300px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  margin: 10px 0;
+  z-index: 1;
+}
+
+.toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: var(--text);
+  color: var(--surface);
+  padding: 9px 16px;
+  border-radius: 6px;
+  font-size: 12px;
+  z-index: 2000;
+  display: none;
+  animation: fadeSlide 0.2s var(--ease);
+}
+.toast.show {
+  display: block;
+}
+
+.empty {
+  padding: 20px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pattern-dot.active {
+  background: var(--text);
+  color: var(--surface);
+  border-color: var(--text);
+}
+
+/* WakeUp 风格可视化课表 */
+.wk-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--surface-sub);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 10px;
+}
+
+.wk-week-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wk-board {
+  display: grid;
+  grid-template-columns: 62px repeat(7, minmax(112px, 1fr));
+  grid-auto-rows: minmax(52px, auto);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--border);
+  gap: 1px;
+  overflow: hidden;
+  min-width: 840px;
+}
+
+.wk-corner,
+.wk-day-head {
+  background: var(--surface-sub);
+  padding: 8px 6px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+
+.wk-day-head .wk-dname {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.wk-day-head .wk-dsub {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.wk-day-head.is-today {
+  background: var(--text);
+  color: var(--surface);
+}
+
+.wk-day-head.is-today .wk-dname,
+.wk-day-head.is-today .wk-dsub {
+  color: var(--surface);
+}
+
+.wk-period-cell {
+  background: var(--surface-sub);
+  padding: 4px 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  line-height: 1.25;
+}
+
+.wk-period-num {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.wk-period-time {
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.wk-slot-bg {
+  background: var(--surface);
+}
+
+.wk-slot-bg.is-today-col {
+  background: #f8f8f9;
+}
+
+.wk-card-wrap {
+  padding: 3px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  pointer-events: none;
+}
+
+.wk-course-card {
+  pointer-events: auto;
+  flex: 1;
+  border-radius: 7px;
+  padding: 7px 8px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  cursor: pointer;
+  transition: transform 0.16s var(--ease), box-shadow 0.16s var(--ease), opacity 0.16s var(--ease);
+  overflow: hidden;
+  border: 1px solid transparent;
+}
+
+.wk-course-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.wk-course-card.in-week {
+  background: var(--text);
+  color: var(--surface);
+  border-color: var(--text);
+}
+
+.wk-course-card.out-week {
+  background: var(--surface-sub);
+  color: var(--muted);
+  border: 1px dashed var(--border-strong);
+  opacity: 0.72;
+}
+
+.wk-course-card.is-paused {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+
+.wk-cname {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-all;
+}
+
+.wk-cmeta {
+  margin-top: 4px;
+  font-size: 10px;
+  line-height: 1.3;
+  opacity: 0.88;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.wk-badge-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  margin-top: 3px;
+  font-size: 10px;
+  opacity: 0.75;
+}
+
+.switch.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.switch.disabled .slider {
+  cursor: not-allowed;
+}
+
+/* 三大板块二级导航与作用域标识 */
+.scope-pill {
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 5px 12px;
+  border-radius: 99px;
+}
+
+.scope-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 6px;
+  background: var(--text);
+  color: var(--surface);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.subnav-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+}
+
+.module-pane,
+.sub-pane {
+  animation: fadeSlide 0.24s var(--ease);
+}
+
+
+
+/* ==================== 通用圆角应用图标与默认跨端组件状态 ==================== */
+.app-round-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 22.5%;
+  object-fit: cover;
+  display: block;
+  flex-shrink: 0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+.win-sidebar {
+  display: none;
+}
+
+.android-bottom-nav {
+  display: none;
+}
+
+.win-only-inline {
+  display: none;
+}
+
+/* ==================== WINDOWS 桌面客户端专属工作台布局 (platform-windows) ==================== */
+html.platform-windows,
+html.platform-windows body {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: #f3f3f5;
+  user-select: none;
+}
+
+html.platform-windows input,
+html.platform-windows textarea,
+html.platform-windows .log-stream {
+  user-select: text;
+}
+
+html.platform-windows #panelLoginApp {
+  max-width: 100% !important;
+  height: 100vh;
+  padding: 0 !important;
+  margin: 0 !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at 50% 24%, #ffffff 0%, #f1f1f4 100%);
+}
+
+html.platform-windows #panelLoginApp > .panel {
+  width: 400px;
+  padding: 28px 26px;
+  border-radius: 14px;
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.07);
+}
+
+html.platform-windows #adminApp.app-shell {
+  max-width: none;
+  width: 100vw;
+  height: 100vh;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 244px minmax(0, 1fr);
+  grid-template-rows: 100vh;
+  overflow: hidden;
+}
+
+html.platform-windows .win-sidebar {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #121215;
+  color: #f4f4f5;
+  border-right: 1px solid #27272a;
+  padding: 18px 14px;
+  overflow-y: auto;
+}
+
+html.platform-windows .win-sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 4px 6px 16px;
+  border-bottom: 1px solid #27272a;
+  margin-bottom: 14px;
+}
+
+html.platform-windows .win-app-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 22.5%;
+  object-fit: cover;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+html.platform-windows .win-brand-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+html.platform-windows .win-brand-logo {
+  height: 22px;
+  width: auto;
+  object-fit: contain;
+  filter: invert(1) brightness(1.8);
+}
+
+html.platform-windows .win-brand-sub {
+  font-size: 10px;
+  color: #a1a1aa;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+html.platform-windows .win-account-box {
+  background: #1c1c21;
+  border: 1px solid #2e2e36;
+  border-radius: 9px;
+  padding: 10px 10px;
+  margin-bottom: 16px;
+}
+
+html.platform-windows .win-account-label {
+  font-size: 11px;
+  color: #a1a1aa;
+  margin-bottom: 6px;
+  font-weight: 500;
+}
+
+html.platform-windows .win-account-box select {
+  background: #121215;
+  color: #fafafa;
+  border-color: #3f3f46;
+  font-size: 12px;
+  padding: 6px 8px;
+}
+
+html.platform-windows .win-nav-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+}
+
+html.platform-windows .win-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+html.platform-windows .win-nav-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #a1a1aa;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.16s var(--ease);
+}
+
+html.platform-windows .win-nav-item:hover {
+  background: #1f1f25;
+  color: #ffffff;
+}
+
+html.platform-windows .win-nav-item.active {
+  background: #fafafa;
+  color: #09090b;
+}
+
+html.platform-windows .win-nav-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.65;
+}
+
+html.platform-windows .win-subnav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 18px;
+  margin-top: 2px;
+  border-left: 1px solid #27272a;
+  margin-left: 14px;
+}
+
+html.platform-windows .win-subnav-item {
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #a1a1aa;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s var(--ease);
+}
+
+html.platform-windows .win-subnav-item:hover {
+  color: #f4f4f5;
+  background: #1c1c21;
+}
+
+html.platform-windows .win-subnav-item.active {
+  color: #ffffff;
+  background: #27272f;
+  font-weight: 600;
+}
+
+html.platform-windows .win-sidebar-footer {
+  padding-top: 12px;
+  border-top: 1px solid #27272a;
+  margin-top: 12px;
+}
+
+html.platform-windows .win-user-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+html.platform-windows .win-user-row .tag {
+  background: #27272a;
+  color: #e4e4e7;
+  border-color: #3f3f46;
+}
+
+html.platform-windows .win-user-row .btn-ghost {
+  background: #1c1c21;
+  color: #e4e4e7;
+  border-color: #3f3f46;
+}
+
+html.platform-windows .win-user-row .btn-ghost:hover {
+  border-color: #fafafa;
+  color: #ffffff;
+}
+
+html.platform-windows .app-main-viewport {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-width: 0;
+  overflow: hidden;
+  background: #f6f6f8;
+}
+
+html.platform-windows .topbar {
+  height: 54px;
+  padding: 0 24px;
+  margin-bottom: 0;
+  background: #ffffff;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+html.platform-windows .topbar .brand-logo,
+html.platform-windows .topbar .app-round-icon {
+  display: none;
+}
+
+html.platform-windows .win-only-inline {
+  display: inline-flex;
+}
+
+html.platform-windows .nav-bar {
+  display: none;
+}
+
+html.platform-windows .app-content-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px 36px;
+}
+
+html.platform-windows .grid-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+html.platform-windows .panel {
+  border-radius: 10px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+}
+
+
+/* ==================== ANDROID 手机客户端原生风格布局 (platform-android) ==================== */
+html.platform-android,
+html.platform-android body {
+  width: 100vw;
+  height: 100dvh;
+  overflow: hidden;
+  background: #f4f4f6;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html.platform-android #panelLoginApp {
+  max-width: 100% !important;
+  height: 100dvh;
+  padding: 20px 18px !important;
+  margin: 0 !important;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+html.platform-android #panelLoginApp > .panel {
+  border-radius: 16px;
+  padding: 24px 20px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.06);
+}
+
+html.platform-android #adminApp.app-shell {
+  max-width: none;
+  width: 100vw;
+  height: 100dvh;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+html.platform-android .app-main-viewport {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+html.platform-android .topbar {
+  height: 54px;
+  padding: 0 14px;
+  margin-bottom: 0;
+  background: #ffffff;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+}
+
+html.platform-android .title-group {
+  gap: 8px;
+  min-width: 0;
+}
+
+html.platform-android .app-round-icon {
+  width: 28px;
+  height: 28px;
+}
+
+html.platform-android .brand-logo {
+  height: 22px;
+}
+
+html.platform-android .status-dot {
+  font-size: 11px;
+  padding: 2px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 145px;
+}
+
+html.platform-android .nav-bar {
+  display: none;
+}
+
+html.platform-android .app-content-scroll {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 12px 12px 84px;
+}
+
+html.platform-android .grid-2 {
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+html.platform-android .subnav-card {
+  padding: 10px 12px;
+  border-radius: 12px;
+  margin-bottom: 12px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+html.platform-android .user-switcher {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+html.platform-android .user-switcher select {
+  flex: 1;
+  min-width: 0;
+  height: 38px;
+}
+
+html.platform-android .tabs {
+  width: 100%;
+  display: flex;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 3px;
+  border-radius: 10px;
+}
+
+html.platform-android .tabs .tab-btn {
+  flex: 1;
+  white-space: nowrap;
+  padding: 8px 10px;
+  font-size: 12px;
+  border-radius: 8px;
+}
+
+html.platform-android .panel {
+  border-radius: 14px;
+  padding: 14px 13px;
+  margin-bottom: 12px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+
+html.platform-android .list-row {
+  border-radius: 10px;
+  padding: 11px 12px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+html.platform-android .btn {
+  min-height: 36px;
+  padding: 7px 13px;
+  border-radius: 8px;
+}
+
+html.platform-android .btn-sm {
+  min-height: 32px;
+  padding: 5px 10px;
+}
+
+html.platform-android input,
+html.platform-android select,
+html.platform-android textarea {
+  min-height: 38px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+html.platform-android .android-bottom-nav {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  height: 62px;
+  background: #ffffff;
+  border-top: 1px solid var(--border);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  flex-shrink: 0;
+  z-index: 90;
+  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.04);
+}
+
+html.platform-android .android-tab-item {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.18s var(--ease);
+}
+
+html.platform-android .android-tab-item .android-tab-icon {
+  width: 20px;
+  height: 20px;
+  transition: transform 0.18s var(--ease);
+}
+
+html.platform-android .android-tab-item.active {
+  color: var(--text);
+  font-weight: 600;
+}
+
+html.platform-android .android-tab-item.active .android-tab-icon {
+  transform: translateY(-1px);
+  stroke-width: 2.4;
+}
+
+/* Android 底部抽屉式弹窗 */
+html.platform-android .backdrop {
+  align-items: flex-end;
+  padding: 0;
+}
+
+html.platform-android .dialog {
+  width: 100vw !important;
+  max-width: 100vw !important;
+  max-height: 88dvh;
+  border-radius: 18px 18px 0 0;
+  padding: 18px 16px 24px;
+  margin: 0;
+  overflow-y: auto;
+  animation: sheetUp 0.24s var(--ease);
+}
+
+@keyframes sheetUp {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+/* ==================== 网页端移动端窄屏响应式兜底 ==================== */
+@media (max-width: 768px) {
+  html.platform-web .layout {
+    padding: 14px 12px 48px;
+  }
+  html.platform-web .grid-2 {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  html.platform-web .nav-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  html.platform-web .tabs {
+    width: 100%;
+    display: flex;
+    overflow-x: auto;
+  }
+  html.platform-web .tabs .tab-btn {
+    flex: 1;
+    white-space: nowrap;
+  }
+}

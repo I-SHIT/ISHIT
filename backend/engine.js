@@ -1208,7 +1208,13 @@ async function executeSignForActive({
       targetNames: (pendingHelperUsers.length > 0 ? pendingHelperUsers : accounts).map((u) => u.name || u.uid),
       captchaKey: needCaptchaKey,
     });
-    const baseUrl = String(store.napcat?.publicBaseUrl || 'http://127.0.0.1:8080').replace(/\/+$/, '');
+    let rawBaseUrl = String(store.napcat?.publicBaseUrl || 'https://ishit.pw').trim();
+    if (!rawBaseUrl || /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/.*)?$/i.test(rawBaseUrl)) {
+      rawBaseUrl = 'https://ishit.pw';
+    } else if (!/^https?:\/\//i.test(rawBaseUrl)) {
+      rawBaseUrl = `http://${rawBaseUrl}`;
+    }
+    const baseUrl = rawBaseUrl.replace(/\/+$/, '');
     helperShareUrl = `${baseUrl}/?help=${hs.token}`;
   }
 

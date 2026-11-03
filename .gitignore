@@ -48,3 +48,9 @@ app.*.map.json
 data/
 
 node_modules/
+# Frontend & Multi-platform build outputs
+frontend/windows/bin/
+frontend/windows/obj/
+frontend/windows/publish/
+frontend/android/build/
+dist/*.idsig

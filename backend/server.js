@@ -45,7 +45,8 @@ function sendJson(res, data, status = 200, extraHeaders = {}) {
     'Content-Type': 'application/json; charset=utf-8',
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, X-Panel-Token, X-Helper-Token',
+    'Access-Control-Allow-Headers': 'Content-Type, X-Panel-Token, X-Helper-Token, Authorization',
+    'Access-Control-Expose-Headers': 'X-Panel-Token',
     ...extraHeaders,
   });
   res.end(payload);
@@ -281,7 +282,8 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, X-Panel-Token, X-Helper-Token',
+      'Access-Control-Allow-Headers': 'Content-Type, X-Panel-Token, X-Helper-Token, Authorization',
+      'Access-Control-Max-Age': '86400',
     });
     return res.end();
   }
@@ -290,26 +292,40 @@ const server = http.createServer(async (req, res) => {
   const pathname = parsedUrl.pathname;
 
   try {
-    // 静态资源
-    if (pathname === '/style.css') {
-      res.writeHead(200, { 'Content-Type': 'text/css; charset=utf-8', 'Cache-Control': 'no-store' });
-      return res.end(fs.readFileSync(path.join(__dirname, '..', 'web', 'style.css'), 'utf8'));
-    }
-    if (pathname === '/app.js') {
-      res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-store' });
-      return res.end(fs.readFileSync(path.join(__dirname, '..', 'web', 'app.js'), 'utf8'));
-    }
-    if (pathname === '/favicon.png' || pathname === '/favicon.ico') {
-      res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' });
-      return res.end(fs.readFileSync(path.join(__dirname, '..', 'web', 'favicon.png')));
-    }
-    if (pathname === '/brand-logo.png') {
-      res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' });
-      return res.end(fs.readFileSync(path.join(__dirname, '..', 'web', 'brand-logo.png')));
-    }
-    if (pathname === '/' || pathname === '/index.html') {
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-      return res.end(fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8'));
+    // 静态资源（支持纯 API 无前端部署模式：若存在本地 frontend/web 则响应静态页，否则根路径返回纯 API 状态）
+    const candidateWebA = path.join(__dirname, '..', 'frontend', 'web');
+    const candidateWebB = path.join(__dirname, '..', 'web');
+    const webRoot = fs.existsSync(path.join(candidateWebA, 'index.html'))
+      ? candidateWebA
+      : (fs.existsSync(path.join(candidateWebB, 'index.html')) ? candidateWebB : null);
+
+    if (webRoot) {
+      if (pathname === '/config.json') {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+        return res.end(fs.readFileSync(path.join(webRoot, 'config.json'), 'utf8'));
+      }
+      if (pathname === '/style.css') {
+        res.writeHead(200, { 'Content-Type': 'text/css; charset=utf-8', 'Cache-Control': 'no-store' });
+        return res.end(fs.readFileSync(path.join(webRoot, 'style.css'), 'utf8'));
+      }
+      if (pathname === '/app.js') {
+        res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-store' });
+        return res.end(fs.readFileSync(path.join(webRoot, 'app.js'), 'utf8'));
+      }
+      if (pathname === '/favicon.png' || pathname === '/favicon.ico') {
+        res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' });
+        return res.end(fs.readFileSync(path.join(webRoot, 'favicon.png')));
+      }
+      if (pathname === '/brand-logo.png') {
+        res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' });
+        return res.end(fs.readFileSync(path.join(webRoot, 'brand-logo.png')));
+      }
+      if (pathname === '/' || pathname === '/index.html') {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        return res.end(fs.readFileSync(path.join(webRoot, 'index.html'), 'utf8'));
+      }
+    } else if (pathname === '/' || pathname === '/index.html') {
+      return sendJson(res, { ok: true, service: 'ISHIT Backend API', version: 'beta', webUrl: 'https://ishit.pw' });
     }
 
     // 0. 面板访问登录鉴权 (支持 Admin / User 权限分级)
@@ -378,7 +394,7 @@ const server = http.createServer(async (req, res) => {
     const currentSess = getValidPanelSession(req);
     if (pathname.startsWith('/api/')) {
       if (!currentSess && !isHelperAuthorizedRoute(req, pathname, parsedUrl)) {
-        return sendJson(res, { ok: false, needAuth: true, msg: '请先登录控制面板' }, 401);
+        return sendJson(res, { ok: false, needAuth: true, msg: '请先登录 ISHIT' }, 401);
       }
     }
 
@@ -1347,7 +1363,13 @@ const server = http.createServer(async (req, res) => {
         creatorUsername: currentSess?.username || ensurePanelAuthStore().username || 'ishit',
         creatorRole: currentSess?.role || 'admin',
       });
-      const base = String(store.napcat?.publicBaseUrl || `http://${req.headers.host || `127.0.0.1:${PORT}`}`).replace(/\/+$/, '');
+      let rawPublicBase = String(store.napcat?.publicBaseUrl || 'https://ishit.pw').trim();
+      if (!rawPublicBase || /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/.*)?$/i.test(rawPublicBase)) {
+        rawPublicBase = 'https://ishit.pw';
+      } else if (!/^https?:\/\//i.test(rawPublicBase)) {
+        rawPublicBase = `http://${rawPublicBase}`;
+      }
+      const base = rawPublicBase.replace(/\/+$/, '');
       const shareUrl = `${base}/?help=${hs.token}`;
 
       let napcatResult = null;
@@ -1472,6 +1494,12 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, { ok: false, msg: '权限不足：仅管理员可修改 NapCat 设置' }, 403);
       }
       const body = await readBodyJson(req);
+      if (body.publicBaseUrl !== undefined) {
+        let pb = String(body.publicBaseUrl || '').trim();
+        if (!pb) pb = 'https://ishit.pw';
+        else if (!/^https?:\/\//i.test(pb)) pb = `http://${pb}`;
+        body.publicBaseUrl = pb.replace(/\/+$/, '');
+      }
       store.napcat = { ...store.napcat, ...body };
       saveStore();
       return sendJson(res, { ok: true, napcat: store.napcat });
@@ -1502,6 +1530,20 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+// 全局异常与退出信号诊断日志，确保任何意外退出都在 app.log 留下完整堆栈
+process.on('uncaughtException', (err) => {
+  sysLog('FATAL', `未捕获异常 (uncaughtException): ${err?.stack || err?.message || err}`);
+});
+process.on('unhandledRejection', (reason) => {
+  sysLog('FATAL', `未处理的 Promise 拒绝 (unhandledRejection): ${reason?.stack || reason?.message || reason}`);
+});
+['SIGINT', 'SIGTERM', 'SIGHUP'].forEach((sig) => {
+  process.on(sig, () => {
+    sysLog('EXIT', `收到系统信号 ${sig}，进程即将退出`);
+    process.exit(0);
+  });
+});
+
 server.listen(PORT, '0.0.0.0', async () => {
   sysLog('BOOT', `服务已启动 http://127.0.0.1:${PORT}`);
   // 启动时若已有登录账号，但未缓存课表，自动拉取一次学习通课表
@@ -1513,3 +1555,4 @@ server.listen(PORT, '0.0.0.0', async () => {
   }
   restartScheduler();
 });
+

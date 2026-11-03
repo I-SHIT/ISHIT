@@ -177,7 +177,7 @@ const defaultStore = {
     groupIds: [],
     privateIds: [],
     groupBindings: {},
-    publicBaseUrl: 'http://127.0.0.1:8080',
+    publicBaseUrl: 'https://ishit.pw',
   },
 };
 
@@ -199,7 +199,14 @@ if (fs.existsSync(STORE_FILE)) {
       },
       schedule: { ...defaultStore.schedule, ...(loaded.schedule || {}) },
       userScheduleConfigs: loaded.userScheduleConfigs || {},
-      napcat: { ...defaultStore.napcat, ...(loaded.napcat || {}) },
+      napcat: {
+        ...defaultStore.napcat,
+        ...(loaded.napcat || {}),
+        publicBaseUrl:
+          !loaded.napcat?.publicBaseUrl || /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/.*)?$/i.test(String(loaded.napcat.publicBaseUrl).trim())
+            ? defaultStore.napcat.publicBaseUrl
+            : String(loaded.napcat.publicBaseUrl).trim().replace(/\/+$/, ''),
+      },
     };
     if (store.accounts && store.accounts.length > 0) {
       for (const acc of store.accounts) {

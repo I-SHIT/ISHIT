@@ -2,12 +2,12 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>ISHIT</title>
-  <link rel="icon" type="image/png" href="/favicon.png?v=3" />
-  <link rel="shortcut icon" type="image/png" href="/favicon.png?v=3" />
+  <link rel="icon" type="image/png" href="favicon.png?v=8" />
+  <link rel="shortcut icon" type="image/png" href="favicon.png?v=8" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/style.css?v=6" />
+  <link rel="stylesheet" href="style.css?v=8" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
 </head>
@@ -103,40 +103,108 @@
 <div id="panelLoginApp" class="layout" style="display:none; max-width:380px; padding-top:12vh;">
   <div class="panel">
     <div class="panel-head">
-      <img src="/brand-logo.png?v=3" alt="ISHIT" class="brand-logo brand-logo-login" />
+      <div class="row" style="gap:10px;">
+        <img src="favicon.png?v=8" alt="ISHIT" class="app-round-icon" />
+        <img src="brand-logo.png?v=3" alt="ISHIT" class="brand-logo brand-logo-login" />
+      </div>
       <span class="tag">身份验证</span>
     </div>
-    <label>管理员账号</label>
+
+    <label>登录账号</label>
     <input id="panelAuthUsername" placeholder="请输入后台账号" autocomplete="username" onkeydown="if(event.key==='Enter')submitPanelLogin()" />
     <label style="margin-top:10px;">访问密码</label>
     <input id="panelAuthPassword" type="password" placeholder="请输入访问密码" autocomplete="current-password" onkeydown="if(event.key==='Enter')submitPanelLogin()" />
-    <button class="btn" style="width:100%; margin-top:18px;" onclick="submitPanelLogin()">登录控制台</button>
+    <button class="btn" style="width:100%; margin-top:18px;" onclick="submitPanelLogin()">登录</button>
     <div id="panelAuthError" style="margin-top:10px; font-size:12px; color:var(--muted); text-align:center;">仅限后台授权账号访问</div>
   </div>
 </div>
 
-<!-- 主管理界面 -->
-<div id="adminApp" class="layout" style="display:none;">
-  <div class="topbar">
-    <div class="title-group">
-      <img src="/brand-logo.png?v=3" alt="ISHIT" class="brand-logo" />
-      <span id="classStatusBadge" class="status-dot">加载中</span>
+<!-- 主管理界面（支持 Web / Windows 桌面分栏 / Android 原生顶底导航三态独立布局） -->
+<div id="adminApp" class="layout app-shell" style="display:none;">
+  <!-- Windows 桌面端专属左侧垂直导航坞 -->
+  <aside id="winDesktopSidebar" class="win-sidebar">
+    <div class="win-sidebar-brand">
+      <img src="favicon.png?v=8" alt="ISHIT" class="win-app-icon" />
+      <div class="win-brand-meta">
+        <img src="brand-logo.png?v=3" alt="ISHIT" class="win-brand-logo" />
+        
+      </div>
     </div>
-    <div class="row" style="gap:10px;">
-      <span id="currentPanelUserBadge" class="tag"></span>
-      <button class="btn btn-ghost" onclick="doPanelLogout()">退出</button>
-    </div>
-  </div>
 
-  <!-- 顶层导航：分为【仪表盘】、【账号工作台】、【系统设置】三大清晰板块 -->
-  <div class="nav-bar">
-    <div class="tabs" id="mainModuleTabs">
-      <button class="tab-btn active" id="mainTabGlobal" data-main="global" onclick="switchMainModule('global')">仪表盘</button>
-      <button class="tab-btn" data-main="user" onclick="switchMainModule('user')">账号工作台</button>
-      <button class="tab-btn" data-main="settings" onclick="switchMainModule('settings')">系统设置</button>
+    <div class="win-account-box">
+      <div class="win-account-label">当前工作台学习通账号</div>
+      <select id="winSidebarUserSelect" onchange="onSelectConfigUser(this.value)"></select>
     </div>
-    <div id="moduleScopeHint" class="scope-pill">仪表盘</div>
-  </div>
+
+    <nav class="win-nav-tree">
+      <div class="win-nav-group">
+        <button type="button" class="win-nav-item active" data-main="global" onclick="switchMainModule('global')">
+          <span class="win-nav-dot"></span>
+          <span>实时仪表盘</span>
+        </button>
+      </div>
+
+      <div class="win-nav-group">
+        <button type="button" class="win-nav-item" data-main="user" onclick="switchMainModule('user')">
+          <span class="win-nav-dot"></span>
+          <span>账号工作台</span>
+        </button>
+        <div class="win-subnav-list" id="winSubNavUser">
+          <button type="button" class="win-subnav-item active" data-sub="courses" onclick="switchUserSubTab('courses')">我的课程</button>
+          <button type="button" class="win-subnav-item" data-sub="schedule" onclick="switchUserSubTab('schedule')">我的课表与 DIY</button>
+          <button type="button" class="win-subnav-item" data-sub="user-location" onclick="switchUserSubTab('user-location')">位置与共享预设</button>
+        </div>
+      </div>
+
+      <div class="win-nav-group">
+        <button type="button" class="win-nav-item" data-main="settings" onclick="switchMainModule('settings')">
+          <span class="win-nav-dot"></span>
+          <span>系统设置</span>
+        </button>
+        <div class="win-subnav-list" id="winSubNavSettings">
+          <button type="button" class="win-subnav-item active" data-sub="polling" onclick="switchSettingsSubTab('polling')">轮询与防钓鱼</button>
+          <button type="button" class="win-subnav-item" data-sub="accounts" onclick="switchSettingsSubTab('accounts')">学习通账号池</button>
+          <button type="button" class="win-subnav-item" id="winSettingsTabNapcat" data-sub="napcat" onclick="switchSettingsSubTab('napcat')">NapCat 推送</button>
+          <button type="button" class="win-subnav-item" data-sub="security" onclick="switchSettingsSubTab('security')">用户与权限</button>
+        </div>
+      </div>
+    </nav>
+
+    <div class="win-sidebar-footer">
+      <div class="win-user-row">
+        <span id="winSidebarPanelUserBadge" class="tag"></span>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="doPanelLogout()">退出登录</button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- 主视口工作区 -->
+  <div class="app-main-viewport">
+    <div class="topbar">
+      <div class="title-group">
+        <img src="favicon.png?v=8" alt="ISHIT" class="app-round-icon" />
+        <img src="brand-logo.png?v=3" alt="ISHIT" class="brand-logo" />
+        <span id="classStatusBadge" class="status-dot">加载中</span>
+      </div>
+      <div class="row topbar-actions" style="gap:8px;">
+        <button type="button" class="btn btn-ghost btn-sm win-only-inline" onclick="triggerQuickSign(false)">立即扫描</button>
+        <button type="button" class="btn btn-ghost btn-sm win-only-inline" onclick="refreshStatus(true)">刷新状态</button>
+        <span id="currentPanelUserBadge" class="tag"></span>
+        <button class="btn btn-ghost btn-sm" onclick="doPanelLogout()">退出</button>
+      </div>
+    </div>
+
+    <!-- 顶层导航：分为【仪表盘】、【账号工作台】、【系统设置】三大清晰板块 -->
+    <div class="nav-bar">
+      <div class="tabs" id="mainModuleTabs">
+        <button class="tab-btn active" id="mainTabGlobal" data-main="global" onclick="switchMainModule('global')">仪表盘</button>
+        <button class="tab-btn" data-main="user" onclick="switchMainModule('user')">账号工作台</button>
+        <button class="tab-btn" data-main="settings" onclick="switchMainModule('settings')">系统设置</button>
+      </div>
+      <div id="moduleScopeHint" class="scope-pill">仪表盘</div>
+    </div>
+
+    <div class="app-content-scroll">
 
   <!-- ==================== 板块一：仪表盘（活动监测 / 签到记录 / 运行日志） ==================== -->
   <section id="module-global" class="module-pane">
@@ -507,7 +575,7 @@
             <label>Access Token</label>
             <input id="napToken" placeholder="选填" />
             <label>面板外部访问地址（生成协助链接使用）</label>
-            <input id="napPublicUrl" placeholder="http://127.0.0.1:8080" />
+            <input id="napPublicUrl" placeholder="https://ishit.pw" />
           </div>
           <div>
             <label>QQ 群聊</label>
@@ -575,6 +643,24 @@
       </div>
     </div>
   </section>
+    </div><!-- /.app-content-scroll -->
+  </div><!-- /.app-main-viewport -->
+
+  <!-- Android 手机端专属底部固定导航栏 -->
+  <nav id="androidBottomNav" class="android-bottom-nav">
+    <button type="button" class="android-tab-item active" data-main="global" onclick="switchMainModule('global')">
+      <svg class="android-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
+      <span>仪表盘</span>
+    </button>
+    <button type="button" class="android-tab-item" data-main="user" onclick="switchMainModule('user')">
+      <svg class="android-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+      <span>账号工作台</span>
+    </button>
+    <button type="button" class="android-tab-item" data-main="settings" onclick="switchMainModule('settings')">
+      <svg class="android-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      <span>系统设置</span>
+    </button>
+  </nav>
 </div>
 
 <!-- 弹窗 1：课程活动列表 -->
@@ -919,6 +1005,11 @@
   </div>
 </div>
 
-<script src="/app.js?v=16"></script>
+
+
+
+<script src="app.js?v=18"></script>
 </body>
 </html>
+
+

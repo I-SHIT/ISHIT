@@ -1,0 +1,5 @@
+# ISHIT 后端 HTTPS 自动证书反代配置 (Caddy)
+# 用法: caddy run --config backend/Caddyfile
+api.ishit.pw {
+    reverse_proxy 127.0.0.1:8080
+}

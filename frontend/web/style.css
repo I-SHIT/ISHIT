@@ -773,3 +773,564 @@ input:checked + .slider::before {
 .sub-pane {
   animation: fadeSlide 0.24s var(--ease);
 }
+
+
+
+/* ==================== 通用圆角应用图标与默认跨端组件状态 ==================== */
+.app-round-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 22.5%;
+  object-fit: cover;
+  display: block;
+  flex-shrink: 0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+.win-sidebar {
+  display: none;
+}
+
+.android-bottom-nav {
+  display: none;
+}
+
+.win-only-inline {
+  display: none;
+}
+
+/* ==================== WINDOWS 桌面客户端专属工作台布局 (platform-windows) ==================== */
+html.platform-windows,
+html.platform-windows body {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: #f3f3f5;
+  user-select: none;
+}
+
+html.platform-windows input,
+html.platform-windows textarea,
+html.platform-windows .log-stream {
+  user-select: text;
+}
+
+html.platform-windows #panelLoginApp {
+  max-width: 100% !important;
+  height: 100vh;
+  padding: 0 !important;
+  margin: 0 !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at 50% 24%, #ffffff 0%, #f1f1f4 100%);
+}
+
+html.platform-windows #panelLoginApp > .panel {
+  width: 400px;
+  padding: 28px 26px;
+  border-radius: 14px;
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.07);
+}
+
+html.platform-windows #adminApp.app-shell {
+  max-width: none;
+  width: 100vw;
+  height: 100vh;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 244px minmax(0, 1fr);
+  grid-template-rows: 100vh;
+  overflow: hidden;
+}
+
+html.platform-windows .win-sidebar {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #121215;
+  color: #f4f4f5;
+  border-right: 1px solid #27272a;
+  padding: 18px 14px;
+  overflow-y: auto;
+}
+
+html.platform-windows .win-sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 4px 6px 16px;
+  border-bottom: 1px solid #27272a;
+  margin-bottom: 14px;
+}
+
+html.platform-windows .win-app-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 22.5%;
+  object-fit: cover;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+html.platform-windows .win-brand-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+html.platform-windows .win-brand-logo {
+  height: 22px;
+  width: auto;
+  object-fit: contain;
+  filter: invert(1) brightness(1.8);
+}
+
+html.platform-windows .win-brand-sub {
+  font-size: 10px;
+  color: #a1a1aa;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+html.platform-windows .win-account-box {
+  background: #1c1c21;
+  border: 1px solid #2e2e36;
+  border-radius: 9px;
+  padding: 10px 10px;
+  margin-bottom: 16px;
+}
+
+html.platform-windows .win-account-label {
+  font-size: 11px;
+  color: #a1a1aa;
+  margin-bottom: 6px;
+  font-weight: 500;
+}
+
+html.platform-windows .win-account-box select {
+  background: #121215;
+  color: #fafafa;
+  border-color: #3f3f46;
+  font-size: 12px;
+  padding: 6px 8px;
+}
+
+html.platform-windows .win-nav-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+}
+
+html.platform-windows .win-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+html.platform-windows .win-nav-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #a1a1aa;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.16s var(--ease);
+}
+
+html.platform-windows .win-nav-item:hover {
+  background: #1f1f25;
+  color: #ffffff;
+}
+
+html.platform-windows .win-nav-item.active {
+  background: #fafafa;
+  color: #09090b;
+}
+
+html.platform-windows .win-nav-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.65;
+}
+
+html.platform-windows .win-subnav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 18px;
+  margin-top: 2px;
+  border-left: 1px solid #27272a;
+  margin-left: 14px;
+}
+
+html.platform-windows .win-subnav-item {
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #a1a1aa;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s var(--ease);
+}
+
+html.platform-windows .win-subnav-item:hover {
+  color: #f4f4f5;
+  background: #1c1c21;
+}
+
+html.platform-windows .win-subnav-item.active {
+  color: #ffffff;
+  background: #27272f;
+  font-weight: 600;
+}
+
+html.platform-windows .win-sidebar-footer {
+  padding-top: 12px;
+  border-top: 1px solid #27272a;
+  margin-top: 12px;
+}
+
+html.platform-windows .win-user-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+html.platform-windows .win-user-row .tag {
+  background: #27272a;
+  color: #e4e4e7;
+  border-color: #3f3f46;
+}
+
+html.platform-windows .win-user-row .btn-ghost {
+  background: #1c1c21;
+  color: #e4e4e7;
+  border-color: #3f3f46;
+}
+
+html.platform-windows .win-user-row .btn-ghost:hover {
+  border-color: #fafafa;
+  color: #ffffff;
+}
+
+html.platform-windows .app-main-viewport {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-width: 0;
+  overflow: hidden;
+  background: #f6f6f8;
+}
+
+html.platform-windows .topbar {
+  height: 54px;
+  padding: 0 24px;
+  margin-bottom: 0;
+  background: #ffffff;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+html.platform-windows .topbar .brand-logo,
+html.platform-windows .topbar .app-round-icon {
+  display: none;
+}
+
+html.platform-windows .win-only-inline {
+  display: inline-flex;
+}
+
+html.platform-windows .nav-bar {
+  display: none;
+}
+
+html.platform-windows .app-content-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px 36px;
+}
+
+html.platform-windows .grid-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+html.platform-windows .panel {
+  border-radius: 10px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+}
+
+
+/* ==================== ANDROID 手机客户端原生风格布局 (platform-android) ==================== */
+html.platform-android,
+html.platform-android body {
+  width: 100vw;
+  height: 100dvh;
+  overflow: hidden;
+  background: #f4f4f6;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html.platform-android #panelLoginApp {
+  max-width: 100% !important;
+  height: 100dvh;
+  padding: 20px 18px !important;
+  margin: 0 !important;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+html.platform-android #panelLoginApp > .panel {
+  border-radius: 16px;
+  padding: 24px 20px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.06);
+}
+
+html.platform-android #adminApp.app-shell {
+  max-width: none;
+  width: 100vw;
+  height: 100dvh;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+html.platform-android .app-main-viewport {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+html.platform-android .topbar {
+  height: 54px;
+  padding: 0 14px;
+  margin-bottom: 0;
+  background: #ffffff;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+}
+
+html.platform-android .title-group {
+  gap: 8px;
+  min-width: 0;
+}
+
+html.platform-android .app-round-icon {
+  width: 28px;
+  height: 28px;
+}
+
+html.platform-android .brand-logo {
+  height: 22px;
+}
+
+html.platform-android .status-dot {
+  font-size: 11px;
+  padding: 2px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 145px;
+}
+
+html.platform-android .nav-bar {
+  display: none;
+}
+
+html.platform-android .app-content-scroll {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 12px 12px 84px;
+}
+
+html.platform-android .grid-2 {
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+html.platform-android .subnav-card {
+  padding: 10px 12px;
+  border-radius: 12px;
+  margin-bottom: 12px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+html.platform-android .user-switcher {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+html.platform-android .user-switcher select {
+  flex: 1;
+  min-width: 0;
+  height: 38px;
+}
+
+html.platform-android .tabs {
+  width: 100%;
+  display: flex;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 3px;
+  border-radius: 10px;
+}
+
+html.platform-android .tabs .tab-btn {
+  flex: 1;
+  white-space: nowrap;
+  padding: 8px 10px;
+  font-size: 12px;
+  border-radius: 8px;
+}
+
+html.platform-android .panel {
+  border-radius: 14px;
+  padding: 14px 13px;
+  margin-bottom: 12px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+
+html.platform-android .list-row {
+  border-radius: 10px;
+  padding: 11px 12px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+html.platform-android .btn {
+  min-height: 36px;
+  padding: 7px 13px;
+  border-radius: 8px;
+}
+
+html.platform-android .btn-sm {
+  min-height: 32px;
+  padding: 5px 10px;
+}
+
+html.platform-android input,
+html.platform-android select,
+html.platform-android textarea {
+  min-height: 38px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+html.platform-android .android-bottom-nav {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  height: 62px;
+  background: #ffffff;
+  border-top: 1px solid var(--border);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  flex-shrink: 0;
+  z-index: 90;
+  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.04);
+}
+
+html.platform-android .android-tab-item {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.18s var(--ease);
+}
+
+html.platform-android .android-tab-item .android-tab-icon {
+  width: 20px;
+  height: 20px;
+  transition: transform 0.18s var(--ease);
+}
+
+html.platform-android .android-tab-item.active {
+  color: var(--text);
+  font-weight: 600;
+}
+
+html.platform-android .android-tab-item.active .android-tab-icon {
+  transform: translateY(-1px);
+  stroke-width: 2.4;
+}
+
+/* Android 底部抽屉式弹窗 */
+html.platform-android .backdrop {
+  align-items: flex-end;
+  padding: 0;
+}
+
+html.platform-android .dialog {
+  width: 100vw !important;
+  max-width: 100vw !important;
+  max-height: 88dvh;
+  border-radius: 18px 18px 0 0;
+  padding: 18px 16px 24px;
+  margin: 0;
+  overflow-y: auto;
+  animation: sheetUp 0.24s var(--ease);
+}
+
+@keyframes sheetUp {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+/* ==================== 网页端移动端窄屏响应式兜底 ==================== */
+@media (max-width: 768px) {
+  html.platform-web .layout {
+    padding: 14px 12px 48px;
+  }
+  html.platform-web .grid-2 {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  html.platform-web .nav-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  html.platform-web .tabs {
+    width: 100%;
+    display: flex;
+    overflow-x: auto;
+  }
+  html.platform-web .tabs .tab-btn {
+    flex: 1;
+    white-space: nowrap;
+  }
+}

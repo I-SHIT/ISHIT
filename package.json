@@ -1,14 +1,15 @@
 {
-  "name": "ishit-chaoxing-web-panel",
-  "version": "2.0.0",
-  "description": "ChaoXing Auto Sign-In, NapCat Broadcast & Peer Helper Web Control Center",
-  "main": "server/server.js",
+  "main": "backend/server.js",
   "scripts": {
-    "start": "node server/server.js"
+    "start": "node backend/server.js",
+    "start:backend": "node backend/server.js"
   },
+  "description": "ISHIT ChaoXing Decoupled Backend API & Multi-Platform Frontends (Web / Windows / Android)",
+  "version": "0.0.0-beta",
   "dependencies": {
-    "jpeg-js": "^0.4.4",
     "jsqr": "^1.4.0",
+    "jpeg-js": "^0.4.4",
     "pngjs": "^7.0.0"
-  }
+  },
+  "name": "ishit-chaoxing-suite"
 }

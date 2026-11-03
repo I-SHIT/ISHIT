@@ -342,6 +342,26 @@ function mergeSetCookies(setCookieHeaders, jar) {
   }
 }
 
+const CHAOXING_FANYA_EDGE_IPS = ['140.210.69.130', '140.210.69.131'];
+const chaoxingEdgeFallbackHosts = new Map(); // hostname -> { ipIdx, until }
+
+function getActiveEdgeIpForHost(hostname) {
+  const entry = chaoxingEdgeFallbackHosts.get(hostname);
+  if (!entry) return null;
+  if (Date.now() > entry.until) {
+    chaoxingEdgeFallbackHosts.delete(hostname);
+    return null;
+  }
+  return CHAOXING_FANYA_EDGE_IPS[entry.ipIdx % CHAOXING_FANYA_EDGE_IPS.length];
+}
+
+function markHostUseFanyaEdge(hostname, rotate = false) {
+  const prev = chaoxingEdgeFallbackHosts.get(hostname);
+  const ipIdx = prev && rotate ? (prev.ipIdx + 1) % CHAOXING_FANYA_EDGE_IPS.length : (prev ? prev.ipIdx : 0);
+  chaoxingEdgeFallbackHosts.set(hostname, { ipIdx, until: Date.now() + 6 * 3600 * 1000 });
+  return CHAOXING_FANYA_EDGE_IPS[ipIdx];
+}
+
 async function cxRequest(urlStr, {
   method = 'GET',
   params = null,
@@ -361,6 +381,7 @@ async function cxRequest(urlStr, {
 
   const jar = getCookieJar(userId, tempSessionKey);
   let redirectCount = 0;
+  let edgeRetryCount = 0;
   let currentMethod = method.toUpperCase();
   let currentBody = body;
 
@@ -383,13 +404,32 @@ async function cxRequest(urlStr, {
       if (payloadBuffer) reqHeaders['Content-Length'] = payloadBuffer.length;
     }
 
+    const edgeIp = getActiveEdgeIpForHost(targetUrl.hostname);
     const res = await new Promise((resolve, reject) => {
-      const lib = targetUrl.protocol === 'https:' ? https : http;
-      const req = lib.request(targetUrl, { method: currentMethod, headers: reqHeaders, timeout: 12000 }, (resp) => {
+      const isHttps = targetUrl.protocol === 'https:';
+      const lib = isHttps ? https : http;
+      const reqOptions = edgeIp
+        ? {
+            protocol: targetUrl.protocol,
+            hostname: edgeIp,
+            port: targetUrl.port || (isHttps ? 443 : 80),
+            path: targetUrl.pathname + targetUrl.search,
+            method: currentMethod,
+            headers: { ...reqHeaders, Host: targetUrl.host },
+            servername: targetUrl.hostname,
+            timeout: 12000,
+          }
+        : {
+            method: currentMethod,
+            headers: reqHeaders,
+            timeout: 12000,
+          };
+      const cb = (resp) => {
         const chunks = [];
         resp.on('data', (chunk) => chunks.push(chunk));
         resp.on('end', () => resolve({ statusCode: resp.statusCode, headers: resp.headers, buffer: Buffer.concat(chunks) }));
-      });
+      };
+      const req = edgeIp ? lib.request(reqOptions, cb) : lib.request(targetUrl, reqOptions, cb);
       req.on('error', reject);
       req.on('timeout', () => req.destroy(new Error('Request timeout')));
       if (payloadBuffer) req.write(payloadBuffer);
@@ -398,6 +438,20 @@ async function cxRequest(urlStr, {
 
     mergeSetCookies(res.headers['set-cookie'], jar);
     if (userId) saveStore();
+
+    const locHeader = String(res.headers.location || '');
+    if (
+      res.statusCode >= 300 &&
+      res.statusCode < 400 &&
+      locHeader.includes('passport403.html') &&
+      targetUrl.hostname.endsWith('chaoxing.com') &&
+      edgeRetryCount < 2
+    ) {
+      const switchedIp = markHostUseFanyaEdge(targetUrl.hostname, edgeRetryCount > 0);
+      edgeRetryCount++;
+      sysLog('NET', `检测到超星节点 ${targetUrl.hostname} 触发 WAF 403，自动切换泛雅边缘节点 ${switchedIp} 重试`);
+      continue;
+    }
 
     if (allowRedirects && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
       const loc = res.headers.location;

@@ -255,6 +255,16 @@ class CXProtocol {
     CXProtocol._signTypeCache = CXProtocol._signTypeCache || {};
 
     const cdKey = userId + '_' + courseId + '_' + classId;
+    const nowTop = Date.now();
+    const cooldownUntilTop = CXProtocol._activeCooldowns[cdKey] || 0;
+    if (cooldownUntilTop > nowTop) {
+      const remainSec = Math.ceil((cooldownUntilTop - nowTop) / 1000);
+      const err = new Error('学习通接口频控冷却中(剩余' + remainSec + 's)');
+      err.rateLimited = true;
+      err.inCooldown = true;
+      throw err;
+    }
+
     const signTypeMap = { 0: 'normal', 2: 'qrCode', 3: 'pattern', 4: 'location', 5: 'code' };
 
     const inferSignTypeFromName = (nameOne) => {
@@ -267,8 +277,8 @@ class CXProtocol {
     };
 
     // 1. 优先走移动端加密接口 ppt/activeAPI/taskactivelist（带 DES 签名 _ext + enc，几乎无频控限制）
-    let joinClassTime = CXProtocol._joinTimeCache[cdKey] || '';
-    if (!joinClassTime) {
+    let cachedJoinTime = CXProtocol._joinTimeCache[cdKey];
+    if (cachedJoinTime === undefined) {
       try {
         const joinRes = await cxRequest('https://mooc1-api.chaoxing.com/gas/clazzperson', {
           params: {
@@ -281,10 +291,13 @@ class CXProtocol {
           },
           userId,
         });
-        joinClassTime = joinRes?.data?.[0]?.createtime || '';
-        if (joinClassTime) CXProtocol._joinTimeCache[cdKey] = joinClassTime;
-      } catch (_) {}
+        cachedJoinTime = joinRes?.data?.[0]?.createtime || '__none__';
+      } catch (_) {
+        cachedJoinTime = '__none__';
+      }
+      CXProtocol._joinTimeCache[cdKey] = cachedJoinTime;
     }
+    const joinClassTime = cachedJoinTime === '__none__' ? '' : cachedJoinTime;
 
     const appParams = EncryptionUtil.getEncParams({
       courseId: String(courseId),
@@ -357,6 +370,14 @@ class CXProtocol {
         });
       }
       return result;
+    }
+
+    if (appRateLimited) {
+      CXProtocol._activeCooldowns[cdKey] = Date.now() + 95 * 1000;
+      const err = new Error('学习通接口触发频控(已进入95s冷却保护)');
+      err.rateLimited = true;
+      err.inCooldown = false;
+      throw err;
     }
 
     // 2. 当移动端接口异常时，才回退调用 Web 端 v2/apis/active/student/activelist

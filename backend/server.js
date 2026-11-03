@@ -172,14 +172,62 @@ function canSessionEditCxAccount(sess, targetUid) {
   return acc.ownerUsername === sess.username;
 }
 
+function isAuthorizedNapcatWebhook(req) {
+  const cfg = store.napcat || {};
+  if (cfg.accessToken) {
+    const authHeader = String(req.headers['authorization'] || '');
+    if (authHeader === `Bearer ${cfg.accessToken}` || req.headers['x-napcat-token'] === cfg.accessToken) {
+      return true;
+    }
+  }
+  if (req.headers['cf-connecting-ip'] || req.headers['cf-ray']) return false;
+  const remote = String(req.socket?.remoteAddress || '');
+  return (
+    remote === '127.0.0.1' ||
+    remote === '::1' ||
+    remote === '::ffff:127.0.0.1' ||
+    /^(::ffff:)?172\.(1[6-9]|2\d|3[0-1])\./.test(remote)
+  );
+}
+
+function maskPhone(phone) {
+  const s = String(phone || '').trim();
+  if (s.length >= 7) return s.slice(0, 3) + '****' + s.slice(-4);
+  return s;
+}
+
+function sanitizeAccountForClient(acc, isAdmin = false, currentUsername = '') {
+  if (!acc || typeof acc !== 'object') return acc;
+  const isOwner = Boolean(currentUsername && acc.ownerUsername === currentUsername);
+  const canSeeFullPhone = isAdmin || isOwner;
+  return {
+    uid: acc.uid,
+    name: acc.name,
+    avatar: acc.avatar,
+    phone: canSeeFullPhone ? acc.phone : maskPhone(acc.phone),
+    school: acc.school,
+    platform: acc.platform,
+    status: acc.status,
+    ownerUsername: acc.ownerUsername,
+    cachedFaceObjectId: acc.cachedFaceObjectId || undefined,
+  };
+}
+
+function sanitizeAccountsListForClient(accounts, currentSess) {
+  const pa = ensurePanelAuthStore();
+  const isAdmin = !currentSess || currentSess.role === 'admin';
+  const currentUsername = currentSess ? currentSess.username : (pa.username || 'ishit');
+  return (accounts || []).map((a) => sanitizeAccountForClient(a, isAdmin, currentUsername));
+}
+
 function isHelperAuthorizedRoute(req, pathname, parsedUrl) {
-  if (pathname === '/api/napcat/webhook_image' || pathname === '/api/qr/decode') return true;
+  if (pathname === '/api/napcat/webhook_image') return isAuthorizedNapcatWebhook(req);
   if (pathname === '/api/helper/info' || pathname === '/api/helper/submit') return true;
   const hToken = req.headers['x-helper-token'] || parsedUrl.searchParams.get('helperToken') || '';
   if (!hToken) return false;
   const hs = getHelperSession(hToken);
   if (!hs) return false;
-  if (pathname === '/api/geo/reverse' || pathname === '/api/geo/search' || pathname === '/api/courses/activeInfo') return true;
+  if (pathname === '/api/qr/decode' || pathname === '/api/geo/reverse' || pathname === '/api/geo/search' || pathname === '/api/courses/activeInfo') return true;
   if (hs.mode === 'captcha' && (pathname === '/api/captcha/get' || pathname === '/api/captcha/verify')) return true;
   if (
     hs.mode === 'login' &&
@@ -677,7 +725,7 @@ const server = http.createServer(async (req, res) => {
         selectedUid: targetUid,
         myOwnedUid: myOwnedAcc?.uid || null,
         canEditSelectedAccount: canSessionEditCxAccount(currentSess, targetUid),
-        accounts: store.accounts || [],
+        accounts: sanitizeAccountsListForClient(store.accounts, currentSess),
         userProfile: rawProfile,
         effectiveProfile,
         courses: targetUid ? mergeCoursesForUser(targetUid) : [],
@@ -719,7 +767,7 @@ const server = http.createServer(async (req, res) => {
           await CXProtocol.getCoursesList(user.uid);
           await CXProtocol.fetchCurriculum(user.uid);
           sysLog('ACCOUNT', `[${actor.username}] 登录学习通成功: ${user.name}`, { uids: [user.uid], ownerUsernames: [actor.username] });
-          return sendJson(res, { ok: true, user });
+          return sendJson(res, { ok: true, user: sanitizeAccountForClient(user, actor.role === 'admin', actor.username) });
         }
       }
       return sendJson(res, { ok: false, msg: loginRes?.msg2 || loginRes?.mes || '账号或密码错误' });
@@ -752,7 +800,7 @@ const server = http.createServer(async (req, res) => {
           await CXProtocol.getCoursesList(user.uid);
           await CXProtocol.fetchCurriculum(user.uid);
           sysLog('ACCOUNT', `[${actor.username}] 短信登录学习通成功: ${user.name}`, { uids: [user.uid], ownerUsernames: [actor.username] });
-          return sendJson(res, { ok: true, user });
+          return sendJson(res, { ok: true, user: sanitizeAccountForClient(user, actor.role === 'admin', actor.username) });
         }
       }
       return sendJson(res, { ok: false, msg: r?.mes || '验证码登录失败' });
@@ -782,7 +830,7 @@ const server = http.createServer(async (req, res) => {
           await CXProtocol.getCoursesList(user.uid);
           await CXProtocol.fetchCurriculum(user.uid);
           sysLog('ACCOUNT', `[${actor.username}] 扫码登录学习通成功: ${user.name}`, { uids: [user.uid], ownerUsernames: [actor.username] });
-          return sendJson(res, { ok: true, loggedIn: true, user });
+          return sendJson(res, { ok: true, loggedIn: true, user: sanitizeAccountForClient(user, actor.role === 'admin', actor.username) });
         }
       }
       return sendJson(res, {
@@ -814,7 +862,7 @@ const server = http.createServer(async (req, res) => {
         delete store.cookies[uid];
         if (store.currentUid === uid) store.currentUid = store.accounts[0]?.uid || null;
         saveStore();
-        return sendJson(res, { ok: true, accounts: store.accounts, currentUid: store.currentUid });
+        return sendJson(res, { ok: true, accounts: sanitizeAccountsListForClient(store.accounts, currentSess), currentUid: store.currentUid });
       }
       if (action === 'refreshAll') {
         for (const acc of store.accounts || []) {
@@ -830,7 +878,7 @@ const server = http.createServer(async (req, res) => {
           }
         }
         saveStore();
-        return sendJson(res, { ok: true, accounts: store.accounts });
+        return sendJson(res, { ok: true, accounts: sanitizeAccountsListForClient(store.accounts, currentSess) });
       }
       if (action === 'uploadFace') {
         if (!canSessionEditCxAccount(currentSess, uid)) {
@@ -843,7 +891,7 @@ const server = http.createServer(async (req, res) => {
         const faceObjId = await CXProtocol.uploadFaceImageBuffer(acc, buf);
         if (!faceObjId) return sendJson(res, { ok: false, msg: '上传人脸底图到超星云盘失败' });
         sysLog('ACCOUNT', `账号[${acc.name}] 已更新人脸签到照片底图 (${faceObjId.slice(0, 10)}...)`, { uids: [acc.uid] });
-        return sendJson(res, { ok: true, cachedFaceObjectId: faceObjId, accounts: store.accounts });
+        return sendJson(res, { ok: true, cachedFaceObjectId: faceObjId, accounts: sanitizeAccountsListForClient(store.accounts, currentSess) });
       }
       return sendJson(res, { ok: false, msg: '未知操作' });
     }

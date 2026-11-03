@@ -17,8 +17,26 @@ const jsQR = require('jsqr');
 const jpeg = require('jpeg-js');
 const { PNG } = require('pngjs');
 
+function isSafeExternalImageUrl(urlStr) {
+  try {
+    const u = new URL(urlStr);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+    const host = (u.hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+    if (!host || host === 'localhost' || host === '::1' || host === '0.0.0.0') return false;
+    if (/^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^169\.254\./.test(host)) return false;
+    if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(host)) return false;
+    if (/^(fc|fd|fe80):/i.test(host)) return false;
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 function fetchRawBuffer(urlStr, timeoutMs = 8000) {
   return new Promise((resolve, reject) => {
+    if (!isSafeExternalImageUrl(urlStr)) {
+      return reject(new Error('Blocked unsafe internal/invalid image URL'));
+    }
     const u = new URL(urlStr);
     const lib = u.protocol === 'https:' ? https : http;
     const req = lib.request(
@@ -578,7 +596,7 @@ function createHelperSession({
     }
   }
 
-  const token = EncryptionUtil.getUniqueId().slice(0, 10);
+  const token = EncryptionUtil.getUniqueId();
   const session = {
     token,
     mode, // 'sign' | 'login' | 'captcha'
@@ -2320,13 +2338,18 @@ async function processIncomingChatImageItem(img) {
   if ((!buf || buf.length < 128) && img.localPath) {
     const rawPath = String(img.localPath);
     const mappedHostPath = rawPath.replace(/^\/app\/\.config\/QQ\b/, '/opt/napcat/qq');
-    if (fs.existsSync(rawPath)) {
-      try { buf = fs.readFileSync(rawPath); } catch (_) {}
-    } else if (mappedHostPath !== rawPath && fs.existsSync(mappedHostPath)) {
-      try { buf = fs.readFileSync(mappedHostPath); } catch (_) {}
+    const allowedRoots = ['/opt/napcat/qq/', '/app/.config/QQ/'];
+    for (const candidate of [mappedHostPath, rawPath]) {
+      const normalized = path.posix.normalize(String(candidate).replace(/\\/g, '/'));
+      if (allowedRoots.some((root) => normalized.startsWith(root)) && fs.existsSync(normalized)) {
+        try {
+          buf = fs.readFileSync(normalized);
+          if (buf && buf.length >= 128) break;
+        } catch (_) {}
+      }
     }
   }
-  if ((!buf || buf.length < 128) && img.url && img.url.startsWith('http')) {
+  if ((!buf || buf.length < 128) && img.url && isSafeExternalImageUrl(img.url)) {
     try {
       buf = await fetchRawBuffer(img.url);
     } catch (_) {}

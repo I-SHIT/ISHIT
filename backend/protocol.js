@@ -243,8 +243,10 @@ class CXProtocol {
       }
     }
     const prof = ensureUserProfile(userId);
-    prof.coursesCache = courses;
-    saveStore();
+    if (courses.length > 0 || !Array.isArray(prof.coursesCache) || prof.coursesCache.length === 0) {
+      prof.coursesCache = courses;
+      saveStore();
+    }
     return courses;
   }
 

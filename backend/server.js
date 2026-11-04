@@ -1736,6 +1736,9 @@ server.listen(PORT, '0.0.0.0', async () => {
   // 启动时若已有登录账号，但未缓存课表，自动拉取一次学习通课表
   for (const acc of store.accounts || []) {
     const prof = ensureUserProfile(acc.uid);
+    if (!prof.coursesCache || prof.coursesCache.length === 0) {
+      await CXProtocol.getCoursesList(acc.uid);
+    }
     if (!prof.curriculumCache) {
       await CXProtocol.fetchCurriculum(acc.uid);
     }

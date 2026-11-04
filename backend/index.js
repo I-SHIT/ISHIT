@@ -440,16 +440,17 @@ async function cxRequest(urlStr, {
     if (userId) saveStore();
 
     const locHeader = String(res.headers.location || '');
+    const isWaf403Redirect = res.statusCode >= 300 && res.statusCode < 400 && locHeader.includes('passport403.html');
+    const isDirect403 = res.statusCode === 403;
     if (
-      res.statusCode >= 300 &&
-      res.statusCode < 400 &&
-      locHeader.includes('passport403.html') &&
+      (isWaf403Redirect || isDirect403) &&
       targetUrl.hostname.endsWith('chaoxing.com') &&
+      targetUrl.hostname !== 'sso.chaoxing.com' &&
       edgeRetryCount < 2
     ) {
       const switchedIp = markHostUseFanyaEdge(targetUrl.hostname, edgeRetryCount > 0);
       edgeRetryCount++;
-      sysLog('NET', `检测到超星节点 ${targetUrl.hostname} 触发 WAF 403，自动切换泛雅边缘节点 ${switchedIp} 重试`);
+      sysLog('NET', `检测到超星节点 ${targetUrl.hostname} 触发 WAF 403 (status=${res.statusCode})，自动切换泛雅边缘节点 ${switchedIp} 重试`);
       continue;
     }
 

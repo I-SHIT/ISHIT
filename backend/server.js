@@ -371,6 +371,27 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' });
         return res.end(fs.readFileSync(path.join(webRoot, 'brand-logo.png')));
       }
+      if (pathname === '/jsqr.js') {
+        const jsqrPath = path.join(webRoot, 'jsqr.js');
+        if (fs.existsSync(jsqrPath)) {
+          res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=86400' });
+          return res.end(fs.readFileSync(jsqrPath, 'utf8'));
+        }
+      }
+      if (pathname.startsWith('/vendor/leaflet/')) {
+        const rel = pathname.replace(/^\/+/, '');
+        const safePath = path.resolve(webRoot, rel);
+        const expectedPrefix = path.resolve(webRoot, 'vendor', 'leaflet');
+        if (safePath.startsWith(expectedPrefix) && fs.existsSync(safePath) && fs.statSync(safePath).isFile()) {
+          const ext = path.extname(safePath).toLowerCase();
+          const mime = ext === '.css' ? 'text/css; charset=utf-8'
+            : ext === '.js' ? 'application/javascript; charset=utf-8'
+            : ext === '.png' ? 'image/png'
+            : 'application/octet-stream';
+          res.writeHead(200, { 'Content-Type': mime, 'Cache-Control': 'public, max-age=86400' });
+          return res.end(fs.readFileSync(safePath));
+        }
+      }
       if (pathname === '/' || pathname === '/index.html') {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
         return res.end(fs.readFileSync(path.join(webRoot, 'index.html'), 'utf8'));
@@ -1232,31 +1253,135 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/geo/search' && req.method === 'GET') {
-      const q = parsedUrl.searchParams.get('q') || '';
+      const q = (parsedUrl.searchParams.get('q') || '').trim();
       if (!q) return sendJson(res, { ok: true, list: [] });
-      const data = await fetchJsonUrl(
-        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=6&accept-language=zh-CN`
-      );
-      const list = Array.isArray(data)
-        ? data.map((item) => ({
-            name: item.display_name.split(',')[0],
-            address: item.display_name,
-            latitude: Number(item.lat),
-            longitude: Number(item.lon),
-          }))
-        : [];
-      return sendJson(res, { ok: true, list });
+
+      const seen = new Set();
+      const results = [];
+      const pushItem = (name, address, lat, lng) => {
+        const latitude = Number(lat);
+        const longitude = Number(lng);
+        if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return;
+        const key = `${latitude.toFixed(4)},${longitude.toFixed(4)}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        results.push({
+          name: String(name || address || q).trim(),
+          address: String(address || name || q).trim(),
+          latitude,
+          longitude,
+        });
+      };
+
+      // 1. 优先匹配本地常用位置预设
+      for (const p of store.locationPresets || []) {
+        if ((p.name && p.name.includes(q)) || (p.address && p.address.includes(q)) || q.includes(p.name || '')) {
+          pushItem(p.name, p.address, p.latitude, p.longitude);
+        }
+      }
+
+      // 2. Photon (Komoot OSM) 多策略检索（支持中文连写自动分词）
+      const parsePhotonFeatures = (features) => {
+        if (!Array.isArray(features)) return;
+        for (const f of features) {
+          const coords = f?.geometry?.coordinates;
+          const props = f?.properties || {};
+          if (!Array.isArray(coords) || coords.length < 2) continue;
+          const name = props.name || props.street || props.district || props.city || q;
+          const addrParts = [props.country, props.state, props.city, props.district, props.street, props.housenumber, props.name]
+            .filter(Boolean);
+          const uniqueParts = [];
+          for (const part of addrParts) {
+            if (!uniqueParts.includes(part)) uniqueParts.push(part);
+          }
+          const address = uniqueParts.join('') || name;
+          pushItem(name, address, coords[1], coords[0]);
+        }
+      };
+
+      const tokenizeChineseQuery = (str) =>
+        String(str || '')
+          .replace(/(省|市|区|县|镇|乡|街道|路|街|道|巷|弄|号|校区|大学|学院|学校|大厦|广场|中心|公园|站|馆|楼|室)/g, '$1 ')
+          .replace(/\s+/g, ' ')
+          .trim();
+
+      const queryPhoton = async (kw) => {
+        if (!kw) return;
+        const data = await fetchJsonUrl(`https://photon.komoot.io/api/?q=${encodeURIComponent(kw)}&limit=8`).catch(() => null);
+        if (data && Array.isArray(data.features)) {
+          parsePhotonFeatures(data.features);
+        }
+      };
+
+      await queryPhoton(q);
+      const tokenized = tokenizeChineseQuery(q);
+      if (results.length < 3 && tokenized && tokenized !== q) {
+        await queryPhoton(tokenized);
+      }
+
+      // 3. 百度地图 POI 联想兜底（专门解决国内复合门牌号、教学楼简称等）
+      if (results.length < 3) {
+        const bdSug = await fetchJsonUrl(`https://map.baidu.com/su?wd=${encodeURIComponent(q)}&cid=1&type=0`).catch(() => null);
+        if (bdSug && Array.isArray(bdSug.s)) {
+          for (const item of bdSug.s.slice(0, 3)) {
+            const parts = String(item).split('$');
+            const city = parts[0] || '';
+            const district = parts[1] || '';
+            const poiName = parts[3] || '';
+            const candidate = `${city} ${district} ${poiName}`.trim();
+            if (candidate) {
+              await queryPhoton(candidate);
+              if (results.length >= 6) break;
+            }
+          }
+        }
+      }
+
+      // 4. Nominatim 最终兜底
+      if (results.length === 0) {
+        const data = await fetchJsonUrl(
+          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=6&accept-language=zh-CN`
+        ).catch(() => null);
+        if (Array.isArray(data)) {
+          for (const item of data) {
+            pushItem(item.display_name.split(',')[0], item.display_name, item.lat, item.lon);
+          }
+        }
+      }
+
+      return sendJson(res, { ok: true, list: results.slice(0, 8) });
     }
 
     if (pathname === '/api/geo/reverse' && req.method === 'GET') {
-      const lat = parsedUrl.searchParams.get('lat') || '';
-      const lng = parsedUrl.searchParams.get('lng') || '';
-      const data = await fetchJsonUrl(
-        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}&accept-language=zh-CN`
-      );
+      const lat = Number(parsedUrl.searchParams.get('lat') || 0);
+      const lng = Number(parsedUrl.searchParams.get('lng') || 0);
+      let address = '';
+
+      // 1. Photon 逆地理编码（国内直连 ~200ms）
+      const photonData = await fetchJsonUrl(
+        `https://photon.komoot.io/reverse?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}`
+      ).catch(() => null);
+      if (photonData && Array.isArray(photonData.features) && photonData.features[0]) {
+        const props = photonData.features[0].properties || {};
+        const addrParts = [props.state, props.city, props.district, props.street, props.housenumber, props.name].filter(Boolean);
+        const uniqueParts = [];
+        for (const part of addrParts) {
+          if (!uniqueParts.includes(part)) uniqueParts.push(part);
+        }
+        address = uniqueParts.join('');
+      }
+
+      // 2. Nominatim 兜底
+      if (!address) {
+        const data = await fetchJsonUrl(
+          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}&accept-language=zh-CN`
+        ).catch(() => null);
+        if (data?.display_name) address = data.display_name;
+      }
+
       return sendJson(res, {
         ok: true,
-        address: data?.display_name || `${Number(lat).toFixed(5)}, ${Number(lng).toFixed(5)}`,
+        address: address || `${lat.toFixed(5)}, ${lng.toFixed(5)}`,
       });
     }
 

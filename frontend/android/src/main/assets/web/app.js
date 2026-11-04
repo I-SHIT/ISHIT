@@ -2130,20 +2130,75 @@ async function copyProfileFromSelected() {
   }
 }
 
-// 位置与地图选点
+// 位置与地图选点（国内高德瓦片 GCJ-02 <-> WGS-84 双向坐标转换）
+function isOutOfChina(lat, lng) {
+  return lng < 72.004 || lng > 137.8347 || lat < 0.8293 || lat > 55.8271;
+}
+
+function deltaGcj(lat, lng) {
+  const a = 6378245.0;
+  const ee = 0.00669342162296594323;
+  const x = lng - 105.0;
+  const y = lat - 35.0;
+  let dLat = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * Math.sqrt(Math.abs(x));
+  dLat += ((20.0 * Math.sin(6.0 * x * Math.PI) + 20.0 * Math.sin(2.0 * x * Math.PI)) * 2.0) / 3.0;
+  dLat += ((20.0 * Math.sin(y * Math.PI) + 40.0 * Math.sin((y / 3.0) * Math.PI)) * 2.0) / 3.0;
+  dLat += ((160.0 * Math.sin((y / 12.0) * Math.PI) + 320 * Math.sin((y * Math.PI) / 30.0)) * 2.0) / 3.0;
+
+  let dLng = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * Math.sqrt(Math.abs(x));
+  dLng += ((20.0 * Math.sin(6.0 * x * Math.PI) + 20.0 * Math.sin(2.0 * x * Math.PI)) * 2.0) / 3.0;
+  dLng += ((20.0 * Math.sin(x * Math.PI) + 40.0 * Math.sin((x / 3.0) * Math.PI)) * 2.0) / 3.0;
+  dLng += ((150.0 * Math.sin((x / 12.0) * Math.PI) + 300.0 * Math.sin((x / 30.0) * Math.PI)) * 2.0) / 3.0;
+
+  const radLat = (lat / 180.0) * Math.PI;
+  let magic = Math.sin(radLat);
+  magic = 1 - ee * magic * magic;
+  const sqrtMagic = Math.sqrt(magic);
+  dLat = (dLat * 180.0) / (((a * (1 - ee)) / (magic * sqrtMagic)) * Math.PI);
+  dLng = (dLng * 180.0) / ((a / sqrtMagic) * Math.cos(radLat) * Math.PI);
+  return { dLat, dLng };
+}
+
+function wgs84ToGcj02(lat, lng) {
+  const nLat = Number(lat);
+  const nLng = Number(lng);
+  if (!Number.isFinite(nLat) || !Number.isFinite(nLng) || isOutOfChina(nLat, nLng)) {
+    return [nLat, nLng];
+  }
+  const { dLat, dLng } = deltaGcj(nLat, nLng);
+  return [nLat + dLat, nLng + dLng];
+}
+
+function gcj02ToWgs84(lat, lng) {
+  const nLat = Number(lat);
+  const nLng = Number(lng);
+  if (!Number.isFinite(nLat) || !Number.isFinite(nLng) || isOutOfChina(nLat, nLng)) {
+    return [nLat, nLng];
+  }
+  const { dLat, dLng } = deltaGcj(nLat, nLng);
+  return [nLat - dLat, nLng - dLng];
+}
+
+function createDomesticTileLayer() {
+  return L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}', {
+    subdomains: ['1', '2', '3', '4'],
+    maxZoom: 18,
+    minZoom: 3,
+    attribution: '© 高德地图',
+  });
+}
+
 function initMainLeafletMap() {
   if (typeof L === 'undefined') return;
   const def = state.status?.effectiveProfile?.defaultLocation || { latitude: 30.8328, longitude: 121.5035, address: '上海应用技术大学(奉贤校区)' };
+  const [gcjLat, gcjLng] = wgs84ToGcj02(def.latitude, def.longitude);
   if (!state.mainMap) {
-    state.mainMap = L.map('mainLeafletMap').setView([def.latitude, def.longitude], 16);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution: '© OpenStreetMap',
-    }).addTo(state.mainMap);
-    state.mainMarker = L.marker([def.latitude, def.longitude]).addTo(state.mainMap);
+    state.mainMap = L.map('mainLeafletMap').setView([gcjLat, gcjLng], 16);
+    createDomesticTileLayer().addTo(state.mainMap);
+    state.mainMarker = L.marker([gcjLat, gcjLng]).addTo(state.mainMap);
     state.mainMap.on('click', async (e) => {
-      const { lat, lng } = e.latlng;
-      setMainMapPoint(lat, lng, null, true);
+      const [wgsLat, wgsLng] = gcj02ToWgs84(e.latlng.lat, e.latlng.lng);
+      setMainMapPoint(wgsLat, wgsLng, null, true);
     });
     setMainMapPoint(def.latitude, def.longitude, def.address, false);
   } else {
@@ -2157,8 +2212,9 @@ async function setMainMapPoint(lat, lng, addr = null, doReverse = false) {
   document.getElementById('mapPickLat').value = latFixed;
   document.getElementById('mapPickLng').value = lngFixed;
   if (state.mainMarker && state.mainMap) {
-    state.mainMarker.setLatLng([lat, lng]);
-    state.mainMap.panTo([lat, lng]);
+    const [gcjLat, gcjLng] = wgs84ToGcj02(lat, lng);
+    state.mainMarker.setLatLng([gcjLat, gcjLng]);
+    state.mainMap.panTo([gcjLat, gcjLng]);
   }
   if (addr) {
     document.getElementById('mapPickAddress').value = addr;
@@ -2170,21 +2226,29 @@ async function setMainMapPoint(lat, lng, addr = null, doReverse = false) {
 
 async function searchMainMap() {
   const q = document.getElementById('mapSearchInput').value.trim();
-  if (!q) return;
-  const res = await api(`/api/geo/search?q=${encodeURIComponent(q)}`);
+  if (!q) return showToast('请输入搜索关键词');
   const box = document.getElementById('mapSearchResults');
+  box.innerHTML = `<span class="tag">搜索中...</span>`;
+  const res = await api(`/api/geo/search?q=${encodeURIComponent(q)}`);
   const list = res.list || [];
+  state.lastMainSearchList = list;
   if (list.length === 0) {
     box.innerHTML = `<span class="tag">无搜索结果</span>`;
     return;
   }
   box.innerHTML = list
     .map(
-      (item) =>
-        `<button class="btn btn-ghost btn-sm" onclick="selectMainSearchPoint(${item.latitude},${item.longitude},'${escapeHtml(item.name)}','${escapeHtml(item.address)}')">${escapeHtml(item.name)}</button>`
+      (item, idx) =>
+        `<button class="btn btn-ghost btn-sm" onclick="selectMainSearchIdx(${idx})">${escapeHtml(item.name)}</button>`
     )
     .join('');
-  selectMainSearchPoint(list[0].latitude, list[0].longitude, list[0].name, list[0].address);
+  selectMainSearchIdx(0);
+}
+
+function selectMainSearchIdx(idx) {
+  const item = (state.lastMainSearchList || [])[idx];
+  if (!item) return;
+  selectMainSearchPoint(item.latitude, item.longitude, item.name, item.address);
 }
 
 function selectMainSearchPoint(lat, lng, name, address) {
@@ -2319,17 +2383,18 @@ function openMapPicker(addrId, latId, lngId) {
 
   setTimeout(() => {
     if (typeof L === 'undefined') return;
+    const [gcjLat, gcjLng] = wgs84ToGcj02(initLat, initLng);
     if (!state.modalMap) {
-      state.modalMap = L.map('modalLeafletMap').setView([initLat, initLng], 16);
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(state.modalMap);
-      state.modalMarker = L.marker([initLat, initLng]).addTo(state.modalMap);
+      state.modalMap = L.map('modalLeafletMap').setView([gcjLat, gcjLng], 16);
+      createDomesticTileLayer().addTo(state.modalMap);
+      state.modalMarker = L.marker([gcjLat, gcjLng]).addTo(state.modalMap);
       state.modalMap.on('click', async (e) => {
-        const { lat, lng } = e.latlng;
-        setModalMapPoint(lat, lng, null, true);
+        const [wgsLat, wgsLng] = gcj02ToWgs84(e.latlng.lat, e.latlng.lng);
+        setModalMapPoint(wgsLat, wgsLng, null, true);
       });
     } else {
       state.modalMap.invalidateSize();
-      state.modalMap.setView([initLat, initLng], 16);
+      state.modalMap.setView([gcjLat, gcjLng], 16);
       setModalMapPoint(initLat, initLng, initAddr, false);
     }
   }, 100);
@@ -2341,8 +2406,9 @@ async function setModalMapPoint(lat, lng, addr = null, doReverse = false) {
   document.getElementById('modalMapLat').value = latFixed;
   document.getElementById('modalMapLng').value = lngFixed;
   if (state.modalMarker && state.modalMap) {
-    state.modalMarker.setLatLng([lat, lng]);
-    state.modalMap.panTo([lat, lng]);
+    const [gcjLat, gcjLng] = wgs84ToGcj02(lat, lng);
+    state.modalMarker.setLatLng([gcjLat, gcjLng]);
+    state.modalMap.panTo([gcjLat, gcjLng]);
   }
   if (addr) {
     document.getElementById('modalMapAddress').value = addr;
@@ -2354,17 +2420,29 @@ async function setModalMapPoint(lat, lng, addr = null, doReverse = false) {
 
 async function searchModalMap() {
   const q = document.getElementById('modalMapSearchInput').value.trim();
-  if (!q) return;
-  const res = await api(`/api/geo/search?q=${encodeURIComponent(q)}`);
+  if (!q) return showToast('请输入搜索关键词');
   const box = document.getElementById('modalMapSearchResults');
+  box.innerHTML = `<span class="tag">搜索中...</span>`;
+  const res = await api(`/api/geo/search?q=${encodeURIComponent(q)}`);
   const list = res.list || [];
+  state.lastModalSearchList = list;
+  if (list.length === 0) {
+    box.innerHTML = `<span class="tag">无搜索结果</span>`;
+    return;
+  }
   box.innerHTML = list
     .map(
-      (item) =>
-        `<button class="btn btn-ghost btn-sm" onclick="setModalMapPoint(${item.latitude},${item.longitude},'${escapeHtml(item.address)}',false)">${escapeHtml(item.name)}</button>`
+      (item, idx) =>
+        `<button class="btn btn-ghost btn-sm" onclick="selectModalSearchIdx(${idx})">${escapeHtml(item.name)}</button>`
     )
     .join('');
-  if (list[0]) setModalMapPoint(list[0].latitude, list[0].longitude, list[0].address, false);
+  selectModalSearchIdx(0);
+}
+
+function selectModalSearchIdx(idx) {
+  const item = (state.lastModalSearchList || [])[idx];
+  if (!item) return;
+  setModalMapPoint(item.latitude, item.longitude, item.address || item.name, false);
 }
 
 function confirmModalMapPick() {

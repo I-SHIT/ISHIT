@@ -2180,12 +2180,25 @@ function gcj02ToWgs84(lat, lng) {
 }
 
 function createDomesticTileLayer() {
-  return L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}', {
+  if (typeof L !== 'undefined' && L.Icon && L.Icon.Default) {
+    L.Icon.Default.imagePath = 'vendor/leaflet/images/';
+  }
+  const layer = L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}', {
     subdomains: ['1', '2', '3', '4'],
     maxZoom: 18,
     minZoom: 3,
     attribution: '© 高德地图',
   });
+  let errCount = 0;
+  let switched = false;
+  layer.on('tileerror', () => {
+    errCount += 1;
+    if (!switched && errCount >= 3) {
+      switched = true;
+      layer.setUrl('https://wprd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&style=7&x={x}&y={y}&z={z}&scl=1&ltype=11');
+    }
+  });
+  return layer;
 }
 
 function initMainLeafletMap() {
@@ -2201,6 +2214,7 @@ function initMainLeafletMap() {
       setMainMapPoint(wgsLat, wgsLng, null, true);
     });
     setMainMapPoint(def.latitude, def.longitude, def.address, false);
+    setTimeout(() => { if (state.mainMap) state.mainMap.invalidateSize(); }, 180);
   } else {
     state.mainMap.invalidateSize();
   }

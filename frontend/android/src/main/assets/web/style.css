@@ -1872,3 +1872,121 @@ html.platform-windows .win-resize-bottomright {
   background: var(--surface);
   border: 1px solid var(--border-strong);
 }
+
+/* 协助完成后双栏/单栏留言与填名布局 */
+.helper-post-grid {
+  display: grid;
+  grid-template-columns: 1fr 1.15fr;
+  gap: 14px;
+  align-items: start;
+}
+
+.helper-post-grid.single-col {
+  grid-template-columns: 1fr;
+}
+
+.helper-post-col {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.helper-col-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+
+@media (max-width: 600px) {
+  .helper-post-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* 签到悬赏：完成记录列表与留言图片缩略图 */
+.bounty-history-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 11px 13px;
+  margin-bottom: 8px;
+  background: var(--surface);
+  transition: border-color 0.15s ease;
+}
+
+.bounty-history-item:hover {
+  border-color: var(--border-strong);
+}
+
+.bounty-history-comment {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--surface-sub);
+  border: 1px dashed var(--border-strong);
+  font-size: 12px;
+  color: var(--text);
+}
+
+.bounty-history-img {
+  display: inline-block;
+  margin-top: 6px;
+  max-width: 140px;
+  max-height: 96px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  object-fit: cover;
+  cursor: pointer;
+}
+
+/* 课表卡片内复制微按钮与粘贴模式高亮 */
+.wk-copy-mini-btn {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  padding: 1px 5px;
+  font-size: 10px;
+  line-height: 1.3;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.88);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.14s ease, background 0.14s ease;
+  z-index: 3;
+}
+
+.wk-course-card:hover .wk-copy-mini-btn {
+  opacity: 1;
+}
+
+.wk-copy-mini-btn:hover {
+  background: var(--text);
+  color: var(--bg);
+}
+
+.wk-slot-bg.can-paste-slot {
+  cursor: copy;
+}
+
+.wk-slot-bg.can-paste-slot:hover {
+  background: rgba(22, 163, 74, 0.09);
+  outline: 1px dashed #16a34a;
+}
+
+.wk-paste-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  border-radius: 8px;
+  background: #f0fdf4;
+  border: 1px solid #86efac;
+  color: #166534;
+  font-size: 12px;
+}

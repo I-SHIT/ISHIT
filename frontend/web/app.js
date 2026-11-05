@@ -23,6 +23,9 @@ const state = {
   modalMap: null,
   modalMarker: null,
   modalTargetIds: null,
+  copiedLessonClipboard: null,
+  claimCommentImageUrl: '',
+  claimCommentUploading: false,
 };
 
 const SIGN_TYPE_LABELS = {
@@ -231,6 +234,23 @@ function getApiBaseUrl() {
   return (!isStandaloneClientEnv() && location.protocol === 'https:')
     ? DEFAULT_HTTPS_TUNNEL_BASE
     : DEFAULT_REMOTE_API_BASE;
+}
+
+function resolveAssetUrl(rawUrl) {
+  const s = String(rawUrl || '').trim();
+  if (!s) return '';
+  if (/^(https?:|data:|blob:)/i.test(s)) return s;
+  const base = getApiBaseUrl();
+  if (s.startsWith('/')) return base ? base + s : s;
+  return base ? `${base}/${s}` : s;
+}
+
+function openImagePreviewModal(src) {
+  const clean = resolveAssetUrl(src);
+  if (!clean) return;
+  const img = document.getElementById('imagePreviewModalImg');
+  if (img) img.src = clean;
+  openModal('imagePreviewModal');
 }
 
 function syncApiEndpointUi() {}
@@ -1225,9 +1245,11 @@ function renderCoursesList(courses) {
              </label>`;
 
         const editBtnsHtml = canEdit
-          ? `<button class="btn ${isTest ? '' : 'btn-ghost'} btn-sm" onclick="toggleTestCourse('${escapeHtml(c.courseId)}', ${!isTest})">${isTest ? '取消测试课' : '设为测试课'}</button>
+          ? `<button class="btn btn-ghost btn-sm" onclick='copyCourseObjectToClipboard(${JSON.stringify({ courseId: c.courseId, classId: c.classId, name: cName, teacherName: cTeacher, className: c.note || "" }).replace(/'/g, "&#39;")})'>复制课程</button>
+             <button class="btn ${isTest ? '' : 'btn-ghost'} btn-sm" onclick="toggleTestCourse('${escapeHtml(c.courseId)}', ${!isTest})">${isTest ? '取消测试课' : '设为测试课'}</button>
              <button class="btn btn-ghost btn-sm" onclick='openCourseSettingModal(${JSON.stringify(c).replace(/'/g, "&#39;")})'>预设</button>`
-          : `<span class="tag">只读</span>`;
+          : `<button class="btn btn-ghost btn-sm" onclick='copyCourseObjectToClipboard(${JSON.stringify({ courseId: c.courseId, classId: c.classId, name: cName, teacherName: cTeacher, className: c.note || "" }).replace(/'/g, "&#39;")})'>复制课程</button>
+             <span class="tag">只读</span>`;
 
         return `<div class="list-row" style="${isTest ? 'background:var(--surface-sub); padding-left:10px; padding-right:10px; border-radius:6px;' : ''}">
         <div>
@@ -1849,9 +1871,10 @@ function renderCurriculumView(cur, diyLessons = []) {
         <span class="wk-period-num">${p}</span>
         <span class="wk-period-time">${rawTime}</span>
       </div>`;
+    const hasClipboard = Boolean(getCopiedLessonClipboard()) && canEditSelectedAccount();
     for (let d = 1; d <= 7; d++) {
       const isTodayCol = d === nowDay && activeWeek === realWeek;
-      cellsHtml += `<div class="wk-slot-bg ${isTodayCol ? 'is-today-col' : ''}" style="grid-column:${d + 1}; grid-row:${p + 1};"></div>`;
+      cellsHtml += `<div class="wk-slot-bg ${isTodayCol ? 'is-today-col' : ''} ${hasClipboard ? 'can-paste-slot' : ''}" style="grid-column:${d + 1}; grid-row:${p + 1};" ${hasClipboard ? `onclick="onClickTimetableEmptySlot(${d}, ${p})" title="点击将已复制课程粘贴至${dayNames[d - 1]}第${p}节"` : ''}></div>`;
     }
   }
 
@@ -1885,10 +1908,25 @@ function renderCurriculumView(cur, diyLessons = []) {
         const locStr = item.location ? `@${item.location}` : '';
         const teacherStr = item.teacherName || item.teacher || '';
         const diyTag = item.isDiy ? '[DIY] ' : '';
+        const copyPayloadJson = JSON.stringify({
+          name: item.name || '',
+          courseId: item.courseId || matchedCourse?.courseId || '',
+          classId: item.classId || matchedCourse?.classId || '',
+          className: item.className || matchedCourse?.note || '',
+          teacherName: teacherStr || matchedCourse?.teacher || '',
+          location: item.location || '',
+          dayOfWeek: Number(item.dayOfWeek || 1),
+          beginNumber: Number(item.beginNumber || 1),
+          length: Math.max(1, Number(item.length || 2)),
+          startTime: item.startTime || '08:00',
+          endTime: item.endTime || '09:50',
+          weeks: Array.isArray(item.weeks) ? item.weeks : [],
+        }).replace(/'/g, "&#39;");
         return `
           <div class="wk-course-card ${item.inThisWeek ? 'in-week' : 'out-week'} ${paused ? 'is-paused' : ''}"
                onclick="onClickWakeupLesson('${escapeHtml(item.courseId || '')}', '${escapeHtml(item.name)}', '${escapeHtml(item.isDiy ? item.id || '' : '')}')"
                title="${escapeHtml(diyTag + item.name)} (${escapeHtml(weekRangeStr)} | ${escapeHtml(item.startTime || '')}-${escapeHtml(item.endTime || '')}) 点击${item.isDiy ? '编辑DIY排课规则' : '配置课程预设'}">
+            <button type="button" class="wk-copy-mini-btn" onclick='event.stopPropagation(); copyCourseObjectToClipboard(${copyPayloadJson})' title="复制该课程排课信息">复制</button>
             <div>
               <div class="wk-cname">${escapeHtml(diyTag + item.name)}</div>
               <div class="wk-cmeta">
@@ -1910,7 +1948,19 @@ function renderCurriculumView(cur, diyLessons = []) {
       </div>`;
   }
 
+  const clipItem = getCopiedLessonClipboard();
+  const pasteBannerHtml = clipItem && canEditSelectedAccount()
+    ? `<div class="wk-paste-banner">
+         <span>已复制课程《<strong>${escapeHtml(clipItem.name || '课程')}</strong>》${clipItem.courseId ? `(courseId:${escapeHtml(clipItem.courseId)})` : ''} · 点击课表任意空白格可直接粘贴到对应星期与节次，或点击下方「粘贴课程」</span>
+         <div class="row" style="gap:6px;">
+           <button type="button" class="btn btn-sm" onclick="pasteCopiedLessonToDiy()">直接粘贴为 DIY 课程</button>
+           <button type="button" class="btn btn-ghost btn-sm" onclick="clearCopiedLessonClipboard()">取消复制</button>
+         </div>
+       </div>`
+    : '';
+  syncDiyPasteButtonsUi();
   wrap.innerHTML = `
+    ${pasteBannerHtml}
     <div class="wk-toolbar">
       <div class="wk-week-nav">
         <button class="btn btn-ghost btn-sm" onclick="changeCurriculumWeek(${Math.max(1, activeWeek - 1)})">上一周</button>
@@ -1977,7 +2027,188 @@ function parseWeeksExpression(str) {
   return [...set].sort((a, b) => a - b);
 }
 
+function getCopiedLessonClipboard() {
+  if (state.copiedLessonClipboard && typeof state.copiedLessonClipboard === 'object') {
+    return state.copiedLessonClipboard;
+  }
+  try {
+    const raw = localStorage.getItem('ishit_copied_lesson_v1');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.name) {
+        state.copiedLessonClipboard = parsed;
+        return parsed;
+      }
+    }
+  } catch (_) {}
+  return null;
+}
+
+function syncDiyPasteButtonsUi() {
+  const clip = getCopiedLessonClipboard();
+  const canEdit = canEditSelectedAccount();
+  const btn = document.getElementById('btnPasteDiyLesson');
+  if (btn) {
+    if (clip && canEdit) {
+      btn.style.display = 'inline-flex';
+      btn.textContent = `粘贴课程（${clip.name.slice(0, 10)}）`;
+    } else {
+      btn.style.display = 'none';
+    }
+  }
+  const modalBtn = document.getElementById('diyModalPasteBtn');
+  if (modalBtn) {
+    modalBtn.style.display = clip ? 'inline-flex' : 'none';
+    if (clip) modalBtn.textContent = `粘贴《${clip.name.slice(0, 8)}》`;
+  }
+}
+
+function copyCourseObjectToClipboard(rawItem) {
+  if (!rawItem || typeof rawItem !== 'object') return;
+  const matchedCourse = (state.courses || []).find(
+    (c) =>
+      (rawItem.courseId && String(c.courseId) === String(rawItem.courseId)) ||
+      (rawItem.name && (c.name || c.courseName) === rawItem.name)
+  );
+  const clip = {
+    name: String(rawItem.name || matchedCourse?.name || matchedCourse?.courseName || '自定义课程').trim(),
+    courseId: String(rawItem.courseId || matchedCourse?.courseId || '').trim(),
+    classId: String(rawItem.classId || matchedCourse?.classId || '').trim(),
+    className: String(rawItem.className || matchedCourse?.note || '').trim(),
+    teacherName: String(rawItem.teacherName || matchedCourse?.teacher || '').trim(),
+    location: String(rawItem.location || '').trim(),
+    dayOfWeek: Number(rawItem.dayOfWeek || 1),
+    beginNumber: Math.max(1, Number(rawItem.beginNumber || 1)),
+    length: Math.max(1, Number(rawItem.length || 2)),
+    startTime: String(rawItem.startTime || '08:00').trim(),
+    endTime: String(rawItem.endTime || '09:50').trim(),
+    weeks: Array.isArray(rawItem.weeks) ? rawItem.weeks : [],
+  };
+  state.copiedLessonClipboard = clip;
+  try {
+    localStorage.setItem('ishit_copied_lesson_v1', JSON.stringify(clip));
+  } catch (_) {}
+  syncDiyPasteButtonsUi();
+  const eff = state.status?.effectiveProfile || {};
+  renderCurriculumView(eff.effectiveCurriculum || eff.curriculumCache, state._editingDiyLessons || eff.diyLessons || []);
+  showToast(`已复制课程《${clip.name}》，可点击课表空白格或「粘贴课程」粘贴至 DIY 课表`);
+}
+
+function clearCopiedLessonClipboard() {
+  state.copiedLessonClipboard = null;
+  try {
+    localStorage.removeItem('ishit_copied_lesson_v1');
+  } catch (_) {}
+  syncDiyPasteButtonsUi();
+  const eff = state.status?.effectiveProfile || {};
+  renderCurriculumView(eff.effectiveCurriculum || eff.curriculumCache, state._editingDiyLessons || eff.diyLessons || []);
+  showToast('已清除复制的课程剪贴板');
+}
+
+function copyDiyLessonByIndex(idx) {
+  const list = state._editingDiyLessons || state.status?.effectiveProfile?.diyLessons || [];
+  const item = list[idx];
+  if (!item) return;
+  copyCourseObjectToClipboard(item);
+}
+
+function copyCurrentCourseFromSettingModal() {
+  const c = state.currentCsCourse;
+  if (!c) return;
+  copyCourseObjectToClipboard({
+    name: c.name || c.courseName || '',
+    courseId: c.courseId || '',
+    classId: c.classId || '',
+    className: c.note || '',
+    teacherName: c.teacher || '',
+    location: document.getElementById('csAddress')?.value.trim() || c.settings?.location?.address || '',
+  });
+}
+
+function fillDiyModalFromClipboard() {
+  const clip = getCopiedLessonClipboard();
+  if (!clip) {
+    showToast('剪贴板暂无已复制的课程信息');
+    return;
+  }
+  populateDiyCourseBindSelect(clip.courseId || '', clip.classId || '');
+  document.getElementById('diyLessonName').value = clip.name || '';
+  document.getElementById('diyCourseId').value = clip.courseId || '';
+  document.getElementById('diyClassId').value = clip.classId || '';
+  document.getElementById('diyTeacherName').value = clip.teacherName || '';
+  document.getElementById('diyLocation').value = clip.location || '';
+  document.getElementById('diyDayOfWeek').value = String(clip.dayOfWeek || 1);
+  const bNum = Math.max(1, Number(clip.beginNumber || 1));
+  const eNum = Math.min(14, bNum + Math.max(1, Number(clip.length || 2)) - 1);
+  document.getElementById('diyBeginNumber').value = bNum;
+  document.getElementById('diyEndNumber').value = eNum;
+  document.getElementById('diyStartTime').value = clip.startTime || '08:00';
+  document.getElementById('diyEndTime').value = clip.endTime || '09:50';
+  document.getElementById('diyWeeksInput').value =
+    Array.isArray(clip.weeks) && clip.weeks.length > 0
+      ? formatWeeksCompact(clip.weeks).replace(/周$/, '')
+      : '';
+  showToast(`已填入课程《${clip.name}》信息`);
+}
+
+async function pasteCopiedLessonToDiy(targetDay = null, targetBeginPeriod = null) {
+  if (!canEditSelectedAccount()) {
+    showToast('只读模式无法修改他人课表');
+    return;
+  }
+  const clip = getCopiedLessonClipboard();
+  if (!clip) {
+    showToast('请先在课表或课程列表点击「复制」');
+    return;
+  }
+  const day = targetDay ? Number(targetDay) : Number(clip.dayOfWeek || 1);
+  const beginNumber = targetBeginPeriod ? Math.max(1, Number(targetBeginPeriod)) : Math.max(1, Number(clip.beginNumber || 1));
+  const length = Math.max(1, Number(clip.length || 2));
+  const endNumber = Math.min(14, beginNumber + length - 1);
+  const eff = state.status?.effectiveProfile || {};
+  const curCfg = eff.effectiveCurriculum?.lessonTimeConfigArray || [];
+  const startPair = (curCfg[beginNumber - 1] && curCfg[beginNumber - 1].split('-')) || DEFAULT_PERIOD_TIMES[beginNumber - 1] || ['08:00', '08:50'];
+  const endPair = (curCfg[endNumber - 1] && curCfg[endNumber - 1].split('-')) || DEFAULT_PERIOD_TIMES[endNumber - 1] || ['09:00', '09:50'];
+  const startTime = targetBeginPeriod ? (startPair[0] || '08:00').trim() : (clip.startTime || (startPair[0] || '08:00').trim());
+  const endTime = targetBeginPeriod ? (endPair[1] || '09:50').trim() : (clip.endTime || (endPair[1] || '09:50').trim());
+
+  state._editingDiyLessons = Array.isArray(state._editingDiyLessons)
+    ? state._editingDiyLessons
+    : [...(eff.diyLessons || [])];
+
+  const newItem = {
+    id: `diy_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    isDiy: true,
+    enabled: true,
+    pollingEnabled: true,
+    courseId: clip.courseId || '',
+    classId: clip.classId || '',
+    className: clip.className || '',
+    name: clip.name || '自定义课程',
+    teacherName: clip.teacherName || '',
+    location: clip.location || '',
+    dayOfWeek: day,
+    beginNumber,
+    length: endNumber - beginNumber + 1,
+    startTime,
+    endTime,
+    weeks: Array.isArray(clip.weeks) ? [...clip.weeks] : [],
+  };
+
+  state._editingDiyLessons.push(newItem);
+  const dayNames = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+  await persistDiyLessonsNow(`已粘贴《${newItem.name}》至 ${dayNames[day - 1] || '周一'} 第${beginNumber}-${endNumber}节`);
+}
+
+function onClickTimetableEmptySlot(day, period) {
+  if (!canEditSelectedAccount()) return;
+  const clip = getCopiedLessonClipboard();
+  if (!clip) return;
+  pasteCopiedLessonToDiy(day, period);
+}
+
 function renderDiyLessonsList(diyList) {
+  syncDiyPasteButtonsUi();
   const box = document.getElementById('diyLessonsContainer');
   if (!box) return;
   const list = Array.isArray(diyList) ? diyList : [];
@@ -2014,6 +2245,7 @@ function renderDiyLessonsList(diyList) {
             <input type="checkbox" ${enabled ? 'checked' : ''} ${!canEditSelectedAccount() ? 'disabled' : ''} onchange="toggleDiyLessonEnabled(${idx}, this.checked)" />
             <span class="slider"></span>
           </label>
+          <button class="btn btn-ghost btn-sm" onclick="copyDiyLessonByIndex(${idx})">复制</button>
           ${canEditSelectedAccount()
             ? `<button class="btn btn-ghost btn-sm" onclick="openDiyLessonModal(${idx})">编辑规则</button>
                <button class="btn btn-ghost btn-sm" onclick="removeDiyLesson(${idx})">删除</button>`
@@ -2091,6 +2323,7 @@ function openDiyLessonModal(editIdx = null) {
   const delBtn = document.getElementById('diyDeleteBtn');
   if (delBtn) delBtn.style.display = existing ? 'inline-flex' : 'none';
 
+  syncDiyPasteButtonsUi();
   openModal('diyLessonModal');
 }
 
@@ -3331,6 +3564,85 @@ function renderBountyAndLeaderboard(data) {
       setHtmlIfChanged(lbBox, lbHtml, lbSig);
     }
   }
+
+  // 渲染【完成记录】（协助者、签到者、加分情况、留言及图片）
+  const bountyHistory = Array.isArray(data.bountyHistory) ? data.bountyHistory : [];
+  const histCountTag = document.getElementById('bountyHistoryCountTag');
+  if (histCountTag) histCountTag.textContent = `${bountyHistory.length} 条`;
+  const histBox = document.getElementById('bountyHistoryList');
+  if (histBox) {
+    if (bountyHistory.length === 0) {
+      setHtmlIfChanged(histBox, `<div class="empty" style="padding:20px 14px;">暂无悬赏完成记录</div>`, 'empty');
+    } else {
+      const histSig = JSON.stringify(
+        bountyHistory.map((h) => [
+          h.id || h.claimToken || '',
+          h.helperName || '',
+          h.helperStudentId || '',
+          h.helperAvatar || '',
+          h.courseName || '',
+          h.activeName || '',
+          h.signedNames || [],
+          Number(h.earnedPoints || 0),
+          Boolean(h.pointsClaimed),
+          h.commentText || '',
+          h.commentImage || '',
+          Number(h.timeMs || 0),
+        ])
+      );
+      const histHtml = bountyHistory
+        .map((h) => {
+          const timeStr = h.timeMs ? new Date(h.timeMs).toLocaleString('zh-CN', { hour12: false }) : '';
+          const avatarHtml = h.helperAvatar
+            ? `<img src="${escapeHtml(resolveAssetUrl(h.helperAvatar))}" class="leaderboard-avatar" style="width:32px; height:32px;" alt="" onerror="this.style.display='none'" />`
+            : '';
+          const helperMeta = h.helperStudentId ? `（学号：${escapeHtml(h.helperStudentId)}）` : '';
+          const signedPills = (Array.isArray(h.signedNames) ? h.signedNames : [])
+            .map((n) => `<span class="student-pill done">${escapeHtml(n)}</span>`)
+            .join('');
+          const ptsNum = Number(h.earnedPoints || 0);
+          const ptsBadge = ptsNum > 0
+            ? `<span class="tag solid" style="background:#16a34a; border-color:#16a34a;">+${ptsNum} 分${h.pointsClaimed ? ' · 已入榜' : ' · 待认领'}</span>`
+            : `<span class="tag">协助完成</span>`;
+          const imgFullUrl = h.commentImage ? resolveAssetUrl(h.commentImage) : '';
+          const hasComment = Boolean((h.commentText && h.commentText.trim()) || imgFullUrl);
+          const commentHtml = hasComment
+            ? `<div class="bounty-history-comment">
+                 <div style="font-size:11px; color:var(--muted); margin-bottom:2px;">协助者留言：</div>
+                 ${h.commentText ? `<div style="white-space:pre-wrap; word-break:break-word;">${escapeHtml(h.commentText)}</div>` : ''}
+                 ${imgFullUrl ? `<div><img src="${escapeHtml(imgFullUrl)}" class="bounty-history-img" alt="留言图片" onclick="openImagePreviewModal('${escapeHtml(imgFullUrl)}')" /></div>` : ''}
+               </div>`
+            : '';
+          return `
+          <div class="bounty-history-item">
+            <div class="row" style="justify-content:space-between; align-items:flex-start; gap:10px; flex-wrap:wrap;">
+              <div class="row" style="gap:8px; align-items:center; min-width:0;">
+                ${avatarHtml}
+                <div>
+                  <div class="row" style="gap:6px; flex-wrap:wrap;">
+                    <span style="font-size:12px; color:var(--muted);">协助者：</span>
+                    <strong style="font-size:13px;">${escapeHtml(h.helperName || '热心同学')}</strong>
+                    <span style="font-size:11px; color:var(--muted);">${helperMeta}</span>
+                    ${ptsBadge}
+                  </div>
+                  <div style="font-size:12px; color:var(--muted); margin-top:3px;">
+                    课程：《${escapeHtml(h.courseName || '课程')}》 · ${escapeHtml(h.activeName || '课堂签到')}
+                  </div>
+                </div>
+              </div>
+              <span style="font-size:11px; color:var(--muted);">${escapeHtml(timeStr)}</span>
+            </div>
+            <div class="row" style="gap:6px; margin-top:8px; flex-wrap:wrap; align-items:center;">
+              <span style="font-size:12px; color:var(--muted);">签到者：</span>
+              <div class="bounty-student-pills" style="margin:0;">${signedPills || '<span class="tag">已完成</span>'}</div>
+            </div>
+            ${commentHtml}
+          </div>`;
+        })
+        .join('');
+      setHtmlIfChanged(histBox, histHtml, histSig);
+    }
+  }
 }
 
 function copyTextValue(text, toastMsg = '已复制到剪贴板') {
@@ -3839,30 +4151,34 @@ async function submitHelperSign(retryFailedOnly = false) {
         ? `<button type="button" class="btn helper-giant-btn" style="width:100%; margin-top:10px; background:#dc2626; border-color:#dc2626;" onclick="submitHelperSign(true)">重试未签账号（${remainingNames.map((n) => escapeHtml(n)).join(' / ')}）</button>`
         : '';
 
+    const isHelperLogged = Boolean(res.helperLoggedIn || state.helperLoggedIn);
+    const lockedName = res.lockedHelperInfo?.name || res.creditedEntry?.displayName || state.helperPrimaryAccount?.name || '';
+    const lockedSid = res.lockedHelperInfo?.studentId || res.creditedEntry?.studentId || state.helperPrimaryAccount?.studentId || '';
+
     let pointsCardHtml = '';
-    if (Number(res.earnedPoints || 0) > 0) {
-      if (res.autoCredited && res.creditedEntry) {
+    if (res.claimToken && (Number(res.earnedPoints || 0) > 0 || okList.length > 0)) {
+      if (isHelperLogged) {
         pointsCardHtml = `
         <div class="helper-claim-card" id="helperClaimCardBox" style="background:#f0fdf4; border-color:#86efac;">
           <div class="row" style="justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
             <div>
-              <div style="font-weight:700; color:#166534;">积分 +${res.earnedPoints} 已计入排行榜</div>
+              <div style="font-weight:700; color:#166534;">${Number(res.earnedPoints || 0) > 0 ? `积分 +${res.earnedPoints} 已归入你的账号` : '协助完成'}</div>
               <div style="font-size:12px; color:#15803d; margin-top:3px;">
-                辅助人：<strong>${escapeHtml(res.creditedEntry.displayName)}</strong>（学号：${escapeHtml(res.creditedEntry.studentId)}） · 总分：<strong>${res.creditedEntry.score} 分</strong>
+                已锁定辅助人：<strong>${escapeHtml(lockedName || '当前登录账号')}</strong>${lockedSid ? `（学号：${escapeHtml(lockedSid)}）` : ''}${res.creditedEntry?.score !== undefined ? ` · 总分：<strong>${res.creditedEntry.score} 分</strong>` : ''}
               </div>
             </div>
-            ${res.claimToken ? `<button type="button" class="btn btn-ghost btn-sm" onclick="openHelperClaimModal('${escapeHtml(res.claimToken)}', ${Number(res.earnedPoints || 0)}, true, '${escapeHtml(res.creditedEntry.displayName || '')}', '${escapeHtml(res.creditedEntry.studentId || '')}')">修改辅助人名称</button>` : ''}
+            <button type="button" class="btn btn-sm" onclick="openHelperClaimModal('${escapeHtml(res.claimToken)}', ${Number(res.earnedPoints || 0)}, true, '${escapeHtml(lockedName)}', '${escapeHtml(lockedSid)}', true)">写留言 / 传图</button>
           </div>
         </div>`;
-      } else if (res.claimToken) {
+      } else {
         pointsCardHtml = `
         <div class="helper-claim-card" id="helperClaimCardBox">
           <div class="row" style="justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
             <div>
-              <div style="font-weight:700; font-size:13px;">本次成功帮签 +${res.earnedPoints} 人</div>
-              <div style="font-size:11px; color:var(--muted); margin-top:2px;">填写辅助人名称与学号即可计入签到大师榜</div>
+              <div style="font-weight:700; font-size:13px;">${Number(res.earnedPoints || 0) > 0 ? `本次成功帮签 +${res.earnedPoints} 人` : '协助签到完成'}</div>
+              <div style="font-size:11px; color:var(--muted); margin-top:2px;">填写名称与学号计入排行榜，并可附带留言与图片</div>
             </div>
-            <button type="button" class="btn btn-sm" onclick="openHelperClaimModal('${escapeHtml(res.claimToken)}', ${Number(res.earnedPoints || 0)}, false)">填写辅助人名称 (+${res.earnedPoints}分)</button>
+            <button type="button" class="btn btn-sm" onclick="openHelperClaimModal('${escapeHtml(res.claimToken)}', ${Number(res.earnedPoints || 0)}, false, '', '', false)">填写名称与留言${Number(res.earnedPoints || 0) > 0 ? ` (+${res.earnedPoints}分)` : ''}</button>
           </div>
         </div>`;
       }
@@ -3879,13 +4195,14 @@ async function submitHelperSign(retryFailedOnly = false) {
     }
     showToast(allDone ? '全部签到成功' : remainingNames.length > 0 ? `部分未签上（剩余 ${remainingNames.length} 人需重试）` : '提交完成');
 
-    if (Number(res.earnedPoints || 0) > 0 && res.claimToken) {
+    if (res.claimToken && (Number(res.earnedPoints || 0) > 0 || okList.length > 0)) {
       openHelperClaimModal(
         res.claimToken,
         Number(res.earnedPoints || 0),
         Boolean(res.autoCredited),
-        res.creditedEntry?.displayName || state.helperPrimaryAccount?.name || '',
-        res.creditedEntry?.studentId || state.helperPrimaryAccount?.studentId || ''
+        lockedName,
+        lockedSid,
+        isHelperLogged
       );
     }
   } finally {
@@ -3896,67 +4213,218 @@ async function submitHelperSign(retryFailedOnly = false) {
   }
 }
 
-function openHelperClaimModal(claimToken, earnedPoints = 1, isAutoCredited = false, defaultName = '', defaultSid = '') {
+function clearClaimCommentImage() {
+  state.claimCommentImageUrl = '';
+  state.claimCommentUploading = false;
+  const inp = document.getElementById('claimCommentImageInput');
+  if (inp) inp.value = '';
+  const wrap = document.getElementById('claimCommentImagePreviewWrap');
+  if (wrap) wrap.style.display = 'none';
+  const img = document.getElementById('claimCommentImagePreview');
+  if (img) img.src = '';
+}
+
+async function compressAndUploadClaimImageFile(file) {
+  if (!file) return;
+  const statusEl = document.getElementById('claimCommentImageStatus');
+  const wrap = document.getElementById('claimCommentImagePreviewWrap');
+  const previewImg = document.getElementById('claimCommentImagePreview');
+  state.claimCommentUploading = true;
+  if (wrap) wrap.style.display = 'flex';
+  if (statusEl) statusEl.textContent = '正在压缩并上传图片...';
+
+  try {
+    const imgEl = await loadFileAsImageElement(file);
+    const srcW = imgEl.naturalWidth || imgEl.width || 800;
+    const srcH = imgEl.naturalHeight || imgEl.height || 600;
+    const maxSide = 1280;
+    const scale = Math.max(srcW, srcH) > maxSide ? maxSide / Math.max(srcW, srcH) : 1;
+    const dstW = Math.max(32, Math.round(srcW * scale));
+    const dstH = Math.max(32, Math.round(srcH * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = dstW;
+    canvas.height = dstH;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, dstW, dstH);
+    ctx.drawImage(imgEl, 0, 0, dstW, dstH);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.86);
+    if (previewImg) previewImg.src = dataUrl;
+
+    const res = await api('/api/helper/uploadImage', 'POST', { base64Image: dataUrl });
+    if (res.ok && res.imageUrl) {
+      state.claimCommentImageUrl = res.imageUrl;
+      if (previewImg) previewImg.src = resolveAssetUrl(res.imageUrl);
+      if (statusEl) statusEl.textContent = '图片上传完成';
+    } else {
+      clearClaimCommentImage();
+      showToast(res.msg || '图片上传失败');
+    }
+  } catch (e) {
+    clearClaimCommentImage();
+    showToast('图片处理失败，请重试');
+  } finally {
+    state.claimCommentUploading = false;
+  }
+}
+
+function onSelectClaimCommentImage(input) {
+  const file = input?.files?.[0];
+  if (!file) return;
+  compressAndUploadClaimImageFile(file);
+}
+
+function bindClaimCommentPasteOnce() {
+  const ta = document.getElementById('claimModalCommentText');
+  if (!ta || ta._pasteBound) return;
+  ta._pasteBound = true;
+  ta.addEventListener('paste', (e) => {
+    const items = e.clipboardData?.items || [];
+    for (const it of items) {
+      if (it.type && it.type.startsWith('image/')) {
+        const f = it.getAsFile();
+        if (f) {
+          e.preventDefault();
+          compressAndUploadClaimImageFile(f);
+          break;
+        }
+      }
+    }
+  });
+}
+
+function openHelperClaimModal(claimToken, earnedPoints = 1, isAutoCredited = false, defaultName = '', defaultSid = '', isLoggedInHelper = false) {
+  state._claimModalIsLogged = Boolean(isLoggedInHelper);
   const tokenEl = document.getElementById('claimModalTokenInput');
+  const titleEl = document.getElementById('claimModalTitle');
   const sumEl = document.getElementById('claimModalSummaryText');
+  const lockedBanner = document.getElementById('claimLockedIdentityBanner');
+  const gridEl = document.getElementById('claimPostGrid');
+  const idCol = document.getElementById('claimIdentityCol');
+  const dialogEl = document.getElementById('helperClaimDialog');
   const nameEl = document.getElementById('claimModalHelperName');
   const sidEl = document.getElementById('claimModalStudentId');
+  const cmtEl = document.getElementById('claimModalCommentText');
+
   if (tokenEl) tokenEl.value = claimToken || '';
-  if (sumEl) {
-    sumEl.textContent = isAutoCredited
-      ? `成功帮签 +${earnedPoints} 人（积分已入账），可在此自定义你的辅助人名称：`
-      : `成功帮签 +${earnedPoints} 人，请填写辅助人名称与学号计入排行榜：`;
+  if (cmtEl) cmtEl.value = '';
+  clearClaimCommentImage();
+  bindClaimCommentPasteOnce();
+
+  if (isLoggedInHelper) {
+    // 已登录：填名区域默认锁定为自己，只显示留言区域
+    if (titleEl) titleEl.textContent = '协助完成 · 留言互动';
+    if (sumEl) {
+      sumEl.textContent = earnedPoints > 0
+        ? `成功帮签 +${earnedPoints} 人，积分已自动归入你的账号`
+        : '协助签到已完成';
+    }
+    if (lockedBanner) {
+      lockedBanner.style.display = 'block';
+      lockedBanner.innerHTML = `辅助人已默认锁定为自己：<strong>${escapeHtml(defaultName || '当前账号')}</strong>${defaultSid ? `（学号：${escapeHtml(defaultSid)}）` : ''}`;
+    }
+    if (idCol) idCol.style.display = 'none';
+    if (gridEl) gridEl.classList.add('single-col');
+    if (dialogEl) dialogEl.style.maxWidth = '460px';
+    if (nameEl) nameEl.value = defaultName || '';
+    if (sidEl) sidEl.value = defaultSid || '';
+  } else {
+    // 未登录：左侧填名区域 + 右侧留言区域并排展示
+    if (titleEl) titleEl.textContent = '签到完成 · 填写名称与留言';
+    if (sumEl) {
+      sumEl.textContent = earnedPoints > 0
+        ? `成功帮签 +${earnedPoints} 人，可填写名称与学号计入排行榜，并在右侧留言：`
+        : '协助签到已完成，可填写名称并在右侧留言：';
+    }
+    if (lockedBanner) lockedBanner.style.display = 'none';
+    if (idCol) idCol.style.display = 'block';
+    if (gridEl) gridEl.classList.remove('single-col');
+    if (dialogEl) dialogEl.style.maxWidth = '650px';
+    const savedName = localStorage.getItem('ishit_helper_name') || defaultName || '';
+    const savedSid = defaultSid || localStorage.getItem('ishit_helper_sid') || '';
+    if (nameEl) nameEl.value = savedName;
+    if (sidEl) {
+      sidEl.value = savedSid;
+      sidEl.readOnly = false;
+    }
   }
-  const savedName = localStorage.getItem('ishit_helper_name') || defaultName || '';
-  const savedSid = defaultSid || localStorage.getItem('ishit_helper_sid') || '';
-  if (nameEl) nameEl.value = savedName;
-  if (sidEl) {
-    sidEl.value = savedSid;
-    sidEl.readOnly = Boolean(isAutoCredited && defaultSid);
-  }
+
   openModal('helperClaimModal');
   setTimeout(() => {
-    if (nameEl) nameEl.focus();
+    if (isLoggedInHelper) {
+      if (cmtEl) cmtEl.focus();
+    } else if (nameEl) {
+      nameEl.focus();
+    }
   }, 60);
 }
 
 async function submitHelperPointClaim(explicitToken) {
-  const claimToken = explicitToken || document.getElementById('claimModalTokenInput')?.value.trim() || '';
-  const helperName =
-    document.getElementById('claimModalHelperName')?.value.trim() ||
-    document.getElementById('claimHelperNameInput')?.value.trim() ||
-    '热心同学';
-  const studentId =
-    document.getElementById('claimModalStudentId')?.value.trim() ||
-    document.getElementById('claimStudentIdInput')?.value.trim() ||
-    '';
-  if (!studentId) {
-    showToast('请输入你的学号以绑定签到大师积分');
+  if (state.claimCommentUploading) {
+    showToast('图片正在上传中，请稍候...');
     return;
   }
-  localStorage.setItem('ishit_helper_name', helperName);
-  localStorage.setItem('ishit_helper_sid', studentId);
+  const isLogged = Boolean(state._claimModalIsLogged);
+  const claimToken = explicitToken || document.getElementById('claimModalTokenInput')?.value.trim() || '';
+  const helperName = document.getElementById('claimModalHelperName')?.value.trim() || '';
+  const studentId = document.getElementById('claimModalStudentId')?.value.trim() || '';
+  const commentText = document.getElementById('claimModalCommentText')?.value.trim() || '';
+  const commentImage = state.claimCommentImageUrl || '';
 
-  const res = await api('/api/helper/claim', 'POST', {
-    claimToken,
-    helperName,
-    studentId,
-  });
-  const card = document.getElementById('helperClaimCardBox');
-  if (res.ok && res.entry) {
+  if (isLogged && !commentText && !commentImage) {
     closeModal('helperClaimModal');
-    if (card) {
-      card.style.background = '#f0fdf4';
-      card.style.borderColor = '#86efac';
-      card.innerHTML = `
-        <div style="font-weight:700; color:#166534;">积分已计入排行榜</div>
-        <div style="font-size:12px; color:#15803d; margin-top:3px;">
-          辅助人：<strong>${escapeHtml(res.entry.displayName)}</strong> · 学号：<strong>${escapeHtml(res.entry.studentId)}</strong> · 累计总分：<strong>${res.entry.score} 分</strong>
-        </div>`;
+    showToast('积分已自动归入你的账号');
+    return;
+  }
+
+  if (!isLogged && !studentId && !commentText && !commentImage && !helperName) {
+    showToast('请填写学号认领积分，或输入留言内容');
+    return;
+  }
+
+  if (!isLogged) {
+    if (helperName) localStorage.setItem('ishit_helper_name', helperName);
+    if (studentId) localStorage.setItem('ishit_helper_sid', studentId);
+  }
+
+  const btn = document.getElementById('claimModalSubmitBtn');
+  if (btn) btn.disabled = true;
+  try {
+    const res = await api('/api/helper/claim', 'POST', {
+      claimToken,
+      helperName: helperName || '热心同学',
+      studentId,
+      commentText,
+      commentImage,
+    });
+    const card = document.getElementById('helperClaimCardBox');
+    if (res.ok) {
+      closeModal('helperClaimModal');
+      if (card) {
+        card.style.background = '#f0fdf4';
+        card.style.borderColor = '#86efac';
+        const cmtDone = commentText || commentImage ? ' · 留言已发布至完成记录' : '';
+        if (res.entry) {
+          card.innerHTML = `
+            <div style="font-weight:700; color:#166534;">已同步至签到大师榜${escapeHtml(cmtDone)}</div>
+            <div style="font-size:12px; color:#15803d; margin-top:3px;">
+              辅助人：<strong>${escapeHtml(res.entry.displayName)}</strong> · 学号：<strong>${escapeHtml(res.entry.studentId)}</strong> · 累计总分：<strong>${res.entry.score} 分</strong>
+            </div>`;
+        } else {
+          card.innerHTML = `<div style="font-weight:700; color:#166534;">协助留言已发布至悬赏完成记录</div>`;
+        }
+      }
+      if (state.status && Array.isArray(res.bountyHistory)) {
+        state.status.bountyHistory = res.bountyHistory;
+        if (Array.isArray(res.leaderboard)) state.status.leaderboard = res.leaderboard;
+        renderBountyAndLeaderboard(state.status);
+      }
+      showToast(res.commentSavedOnly ? '留言已发布至完成记录' : '提交成功，已同步排行榜与完成记录');
+    } else {
+      showToast(res.msg || '提交失败');
     }
-    showToast(`已计入排行榜，当前总分 ${res.entry.score} 分`);
-  } else {
-    showToast(res.msg || '提交失败');
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 

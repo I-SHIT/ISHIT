@@ -375,6 +375,17 @@
         <div id="masterLeaderboardList"></div>
       </div>
     </div>
+
+    <div class="panel" style="margin-top:14px;">
+      <div class="panel-head">
+        <div>
+          <span class="panel-title">完成记录</span>
+          <div style="font-size:11px; color:var(--muted); margin-top:2px;">展示协助者、签到者、加分情况与留言动态</div>
+        </div>
+        <span class="tag" id="bountyHistoryCountTag">0 条</span>
+      </div>
+      <div id="bountyHistoryList"></div>
+    </div>
   </section>
 
   <!-- ==================== 板块二：账号工作台（按账号独立管理：课程 / 课表与DIY / 专属位置） ==================== -->
@@ -453,7 +464,8 @@
             <span class="panel-title">DIY 课表（在导入课表基础上自定义新增排课与班级轮询规则）</span>
             <div style="font-size:11px; color:var(--muted); margin-top:2px;">支持绑定已导入的「课程 - 班级」或自定义课程排课，自动合并至上方可视化课表与轮询引擎</div>
           </div>
-          <div class="row" style="gap:6px;">
+          <div class="row" style="gap:6px; flex-wrap:wrap;">
+            <button class="btn btn-ghost btn-sm" id="btnPasteDiyLesson" style="display:none;" onclick="pasteCopiedLessonToDiy()">粘贴课程</button>
             <button class="btn btn-sm" onclick="openDiyLessonModal()">新增 DIY 课程</button>
           </div>
         </div>
@@ -868,7 +880,10 @@
   <div class="dialog">
     <div class="panel-head">
       <span class="panel-title" id="csModalTitle">课程预设</span>
-      <button class="btn btn-ghost btn-sm" onclick="closeModal('courseSettingModal')">关闭</button>
+      <div class="row" style="gap:6px;">
+        <button class="btn btn-ghost btn-sm" type="button" onclick="copyCurrentCourseFromSettingModal()">复制该课程</button>
+        <button class="btn btn-ghost btn-sm" type="button" onclick="closeModal('courseSettingModal')">关闭</button>
+      </div>
     </div>
     <label>快速选用常用位置预设</label>
     <div class="row">
@@ -966,7 +981,10 @@
   <div class="dialog" style="max-width:520px;">
     <div class="panel-head">
       <span class="panel-title" id="diyModalTitle">新增 DIY 排课规则</span>
-      <button class="btn btn-ghost btn-sm" onclick="closeModal('diyLessonModal')">关闭</button>
+      <div class="row" style="gap:6px;">
+        <button class="btn btn-ghost btn-sm" type="button" id="diyModalPasteBtn" onclick="fillDiyModalFromClipboard()">粘贴课程信息</button>
+        <button class="btn btn-ghost btn-sm" type="button" onclick="closeModal('diyLessonModal')">关闭</button>
+      </div>
     </div>
     <label>关联轮询「课程 - 班级」规则（从已导入课程选择，或手动填写）</label>
     <select id="diyCourseBindSelect" onchange="onSelectDiyCourseBind(this.value)"></select>
@@ -1116,29 +1134,67 @@
 
 
 
-<!-- 弹窗 11：签到成功后辅助人名称与学号登记弹窗 -->
+<!-- 弹窗 11：签到协助完成后登记与留言弹窗 -->
 <div id="helperClaimModal" class="backdrop">
-  <div class="dialog" style="max-width:400px;">
+  <div class="dialog" id="helperClaimDialog" style="max-width:620px;">
     <div class="panel-head">
-      <span class="panel-title">填写辅助人名称</span>
-      <button class="btn btn-ghost btn-sm" onclick="closeModal('helperClaimModal')">关闭</button>
+      <span class="panel-title" id="claimModalTitle">签到完成 · 协助登记与留言</span>
+      <button class="btn btn-ghost btn-sm" type="button" onclick="closeModal('helperClaimModal')">关闭</button>
     </div>
     <input type="hidden" id="claimModalTokenInput" />
     <div id="claimModalSummaryText" style="font-size:13px; font-weight:600; color:#166534; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:8px; padding:8px 10px; margin-bottom:10px;">
-      签到成功，填写名称与学号计入签到大师榜
+      签到成功
     </div>
-    <label style="margin-top:4px;">辅助人名称</label>
-    <input id="claimModalHelperName" placeholder="输入你的名称或昵称" />
-    <label style="margin-top:8px;">学号（必填，积分归属该学号，支持使用不同名称）</label>
-    <input id="claimModalStudentId" placeholder="输入学号" />
+    <div id="claimLockedIdentityBanner" style="display:none; font-size:12px; color:var(--text); background:var(--surface-sub); border:1px solid var(--border-strong); border-radius:8px; padding:8px 10px; margin-bottom:10px;">
+    </div>
+
+    <div id="claimPostGrid" class="helper-post-grid">
+      <!-- 未登录时显示左侧填名区域；已登录时自动隐藏并锁定为自己 -->
+      <div id="claimIdentityCol" class="helper-post-col">
+        <div class="helper-col-title">辅助人登记</div>
+        <label style="margin-top:4px;">辅助人名称</label>
+        <input id="claimModalHelperName" placeholder="输入你的名称或昵称" />
+        <label style="margin-top:8px;">学号（积分归属凭证，同一学号可使用不同名称）</label>
+        <input id="claimModalStudentId" placeholder="输入学号以计入排行榜" />
+      </div>
+
+      <!-- 留言与图片上传区域（未登录位于填名区域旁，已登录单独展示） -->
+      <div id="claimCommentCol" class="helper-post-col">
+        <div class="row" style="justify-content:space-between; align-items:center; margin-bottom:4px;">
+          <span class="helper-col-title" style="margin-bottom:0;">协助留言（选填）</span>
+          <div class="row" style="gap:6px;">
+            <input type="file" id="claimCommentImageInput" accept="image/*" style="display:none;" onchange="onSelectClaimCommentImage(this)" />
+            <button type="button" class="btn btn-ghost btn-sm" id="claimUploadImgBtn" onclick="document.getElementById('claimCommentImageInput').click()">上传图片</button>
+          </div>
+        </div>
+        <textarea id="claimModalCommentText" rows="4" placeholder="写点留言给被帮签的同学（支持粘贴或上传图片）..." style="width:100%; resize:vertical;"></textarea>
+        <div id="claimCommentImagePreviewWrap" style="display:none; margin-top:8px; align-items:center; gap:10px; padding:6px 8px; border:1px solid var(--border); border-radius:8px; background:var(--surface-sub);">
+          <img id="claimCommentImagePreview" src="" alt="预览" style="width:52px; height:52px; object-fit:cover; border-radius:6px; border:1px solid var(--border-strong); cursor:pointer;" onclick="openImagePreviewModal(this.src)" />
+          <div style="flex:1; min-width:0; font-size:12px; color:var(--muted);" id="claimCommentImageStatus">已添加图片</div>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="clearClaimCommentImage()">移除</button>
+        </div>
+      </div>
+    </div>
+
     <div class="row" style="margin-top:16px; gap:8px;">
-      <button type="button" class="btn" style="flex:2;" onclick="submitHelperPointClaim()">确认提交</button>
-      <button type="button" class="btn btn-ghost" style="flex:1;" onclick="closeModal('helperClaimModal')">暂不填写</button>
+      <button type="button" class="btn" id="claimModalSubmitBtn" style="flex:2;" onclick="submitHelperPointClaim()">确认提交</button>
+      <button type="button" class="btn btn-ghost" style="flex:1;" onclick="closeModal('helperClaimModal')">跳过</button>
     </div>
   </div>
 </div>
 
-<script src="app.js?v=22"></script>
+<!-- 弹窗 12：留言大图预览弹窗 -->
+<div id="imagePreviewModal" class="backdrop" onclick="if(event.target===this)closeModal('imagePreviewModal')">
+  <div class="dialog" style="max-width:780px; padding:12px; text-align:center;">
+    <div class="panel-head" style="margin-bottom:8px;">
+      <span class="panel-title">图片预览</span>
+      <button class="btn btn-ghost btn-sm" type="button" onclick="closeModal('imagePreviewModal')">关闭</button>
+    </div>
+    <img id="imagePreviewModalImg" src="" alt="图片预览" style="max-width:100%; max-height:76vh; border-radius:8px; object-fit:contain;" />
+  </div>
+</div>
+
+<script src="app.js?v=23"></script>
 </body>
 </html>
 

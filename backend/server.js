@@ -5,6 +5,7 @@ const path = require('path');
 const { URL } = require('url');
 const {
   EncryptionUtil,
+  COMMENT_IMAGES_DIR,
   store,
   saveStore,
   ensureUserProfile,
@@ -24,6 +25,7 @@ const {
   creditHelperPointsToStudent,
   claimHelperPointsByToken,
   getFormattedLeaderboard,
+  getFormattedBountyHistory,
   syncActiveBountiesNow,
   getActiveBountiesForUser,
   executeSignForActive,
@@ -229,7 +231,7 @@ function sanitizeAccountsListForClient(accounts, currentSess) {
 
 function isHelperAuthorizedRoute(req, pathname, parsedUrl) {
   if (pathname === '/api/napcat/webhook_image') return isAuthorizedNapcatWebhook(req);
-  if (pathname === '/api/helper/info' || pathname === '/api/helper/submit' || pathname === '/api/helper/claim' || pathname === '/api/helper/leaderboard') return true;
+  if (pathname === '/api/helper/info' || pathname === '/api/helper/submit' || pathname === '/api/helper/claim' || pathname === '/api/helper/uploadImage' || pathname === '/api/helper/leaderboard') return true;
   const hToken = req.headers['x-helper-token'] || parsedUrl.searchParams.get('helperToken') || '';
   if (!hToken) return false;
   const hs = getHelperSession(hToken);
@@ -350,6 +352,36 @@ const server = http.createServer(async (req, res) => {
   const pathname = parsedUrl.pathname;
 
   try {
+    // 公开托管协助留言图片 (/uploads/comments/<filename>)，兼容纯 API 模式与静态托管模式
+    if (pathname.startsWith('/uploads/comments/') && req.method === 'GET') {
+      const fileName = path.basename(pathname);
+      if (!/^[a-zA-Z0-9_-]+\.(jpg|jpeg|png|webp|gif)$/i.test(fileName)) {
+        res.writeHead(404);
+        return res.end('Not Found');
+      }
+      const filePath = path.join(COMMENT_IMAGES_DIR, fileName);
+      if (!fs.existsSync(filePath)) {
+        res.writeHead(404);
+        return res.end('Not Found');
+      }
+      const ext = path.extname(fileName).toLowerCase();
+      const mimeMap = {
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.png': 'image/png',
+        '.webp': 'image/webp',
+        '.gif': 'image/gif',
+      };
+      const buf = fs.readFileSync(filePath);
+      res.writeHead(200, {
+        'Content-Type': mimeMap[ext] || 'image/jpeg',
+        'Content-Length': buf.length,
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'public, max-age=604800',
+      });
+      return res.end(buf);
+    }
+
     // 静态资源（支持纯 API 无前端部署模式：若存在本地 frontend/web 则响应静态页，否则根路径返回纯 API 状态）
     const candidateWebA = path.join(__dirname, '..', 'frontend', 'web');
     const candidateWebB = path.join(__dirname, '..', 'web');
@@ -870,6 +902,7 @@ const server = http.createServer(async (req, res) => {
         napcat: isAdmin ? store.napcat : null,
         bounties: activeBounties,
         leaderboard: getFormattedLeaderboard(),
+        bountyHistory: getFormattedBountyHistory(),
         recentAlerts: visibleAlerts,
         pendingCaptchas: visibleCaptchas,
         history: visibleHistory,
@@ -1709,6 +1742,7 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         bounties: getActiveBountiesForUser({ myCourseIds, myClassIds, myCourseNames, myOwnedUids }),
         leaderboard: getFormattedLeaderboard(),
+        bountyHistory: getFormattedBountyHistory(),
         isAdmin,
       });
     }
@@ -1850,50 +1884,91 @@ const server = http.createServer(async (req, res) => {
         hs.lastResult = record;
 
         const earnedPoints = newlyCreditedUsers.length;
+        const okResultsNow = (record.results || []).filter((r) => r.ok);
+        const isLoggedInHelper = Boolean(currentSess);
+        const lockedHelperName = String(helperAcc?.name || currentSess?.username || '').trim();
+        const lockedHelperSid = String(helperAcc?.studentId || helperAcc?.uid || currentSess?.username || '').trim();
         let autoCredited = false;
         let creditedEntry = null;
         let claimToken = '';
 
-        if (earnedPoints > 0) {
+        if (earnedPoints > 0 || okResultsNow.length > 0) {
           claimToken = EncryptionUtil.getUniqueId();
           store.helperClaims = store.helperClaims || {};
           const explicitSid = String(body.studentId || '').trim();
-          if (helperAcc || explicitSid) {
-            // 已登录 ISHIT 主账号或已直接提供学号 -> 自动归入该主账号/学号名下，并支持事后在弹窗修改自定义称号
-            const targetSid = explicitSid || helperAcc?.studentId || helperAcc?.uid || '';
-            creditedEntry = creditHelperPointsToStudent({
-              studentId: targetSid,
-              helperName: body.helperName || helperAcc?.name || currentSess?.username || '',
-              cxAccount: helperAcc,
-              points: earnedPoints,
-              activeId: hs.activeId,
-              courseName: hs.courseName,
-            });
-            autoCredited = Boolean(creditedEntry);
+          if (isLoggedInHelper || helperAcc || explicitSid) {
+            // 已登录 ISHIT 账号：填名区域默认锁定为自己，积分自动归入自己名下
+            const targetSid = explicitSid || lockedHelperSid;
+            const targetName = lockedHelperName || String(body.helperName || targetSid).trim();
+            if (earnedPoints > 0 && targetSid) {
+              creditedEntry = creditHelperPointsToStudent({
+                studentId: targetSid,
+                helperName: targetName,
+                cxAccount: helperAcc,
+                points: earnedPoints,
+                activeId: hs.activeId,
+                courseName: hs.courseName,
+              });
+              autoCredited = Boolean(creditedEntry);
+            } else {
+              autoCredited = true;
+            }
             store.helperClaims[claimToken] = {
               claimToken,
               points: earnedPoints,
               activeId: hs.activeId,
               courseName: hs.courseName,
-              helpedNames: newlyCreditedUsers.map((u) => u.name || u.uid),
+              helpedNames: (newlyCreditedUsers.length > 0 ? newlyCreditedUsers : okResultsNow).map((u) => u.name || u.uid),
               createdAt: Date.now(),
-              claimed: autoCredited,
-              autoCredited: autoCredited,
+              claimed: true,
+              autoCredited: true,
+              lockedIdentity: isLoggedInHelper,
               claimedByStudentId: String(targetSid),
-              claimedByName: String(body.helperName || helperAcc?.name || ''),
+              claimedByName: String(creditedEntry?.displayName || targetName),
             };
           } else {
-            // 未登录 ISHIT -> 生成事后认领凭证，在签到成功弹窗中填写名称+学号入榜
+            // 未登录 ISHIT -> 生成事后认领与留言凭证
             store.helperClaims[claimToken] = {
               claimToken,
               points: earnedPoints,
               activeId: hs.activeId,
               courseName: hs.courseName,
-              helpedNames: newlyCreditedUsers.map((u) => u.name || u.uid),
+              helpedNames: (newlyCreditedUsers.length > 0 ? newlyCreditedUsers : okResultsNow).map((u) => u.name || u.uid),
               createdAt: Date.now(),
-              claimed: false,
+              claimed: earnedPoints === 0,
               autoCredited: false,
+              lockedIdentity: false,
             };
+          }
+
+          // 写入【签到悬赏 - 完成记录】（记录协助者、签到者、加分情况、后续可补充留言与图片）
+          const signedNameList = (newlyCreditedUsers.length > 0 ? newlyCreditedUsers : okResultsNow).map((u) => u.name || u.uid);
+          if (signedNameList.length > 0) {
+            store.bountyHistory = Array.isArray(store.bountyHistory) ? store.bountyHistory : [];
+            store.bountyHistory.unshift({
+              id: claimToken,
+              claimToken,
+              timeMs: Date.now(),
+              courseId: hs.courseId || '',
+              classId: hs.classId || '',
+              courseName: hs.courseName || '协助课程',
+              activeId: hs.activeId || '',
+              activeName: hs.activeName || '课堂签到',
+              signType: hs.signType || 'normal',
+              helperName: isLoggedInHelper
+                ? (creditedEntry?.displayName || lockedHelperName || '已登录同学')
+                : (String(body.helperName || '').trim() || '热心同学'),
+              helperCxName: helperAcc?.name || creditedEntry?.cxName || '',
+              helperStudentId: isLoggedInHelper ? lockedHelperSid : (creditedEntry?.studentId || ''),
+              helperAvatar: creditedEntry?.avatar || helperAcc?.avatar || (helperAcc?.uid ? `https://photo.chaoxing.com/p/${helperAcc.uid}_80` : ''),
+              isLoggedInHelper,
+              signedNames: signedNameList,
+              earnedPoints,
+              pointsClaimed: Boolean(isLoggedInHelper || autoCredited),
+              commentText: '',
+              commentImage: '',
+            });
+            if (store.bountyHistory.length > 100) store.bountyHistory.length = 100;
           }
         }
 
@@ -1906,6 +1981,13 @@ const server = http.createServer(async (req, res) => {
           autoCredited,
           creditedEntry,
           claimToken,
+          helperLoggedIn: isLoggedInHelper,
+          lockedHelperInfo: isLoggedInHelper
+            ? {
+                name: creditedEntry?.displayName || lockedHelperName || currentSess?.username || '',
+                studentId: lockedHelperSid,
+              }
+            : null,
           remainingCount: remainingUids.length,
           remainingNames,
           allSucceededNames,

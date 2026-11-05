@@ -874,30 +874,84 @@ function creditHelperPointsToStudent({
   return existing;
 }
 
-function claimHelperPointsByToken({ claimToken = '', helperName = '', studentId = '' }) {
+function getFormattedBountyHistory(limit = 50) {
+  store.bountyHistory = Array.isArray(store.bountyHistory) ? store.bountyHistory : [];
+  return store.bountyHistory.slice(0, limit);
+}
+
+function claimHelperPointsByToken({ claimToken = '', helperName = '', studentId = '', commentText = '', commentImage = '' }) {
   store.helperClaims = store.helperClaims || {};
-  const claim = store.helperClaims[String(claimToken || '').trim()];
+  store.bountyHistory = Array.isArray(store.bountyHistory) ? store.bountyHistory : [];
+  const tokenKey = String(claimToken || '').trim();
+  const claim = store.helperClaims[tokenKey];
   if (!claim) return { ok: false, msg: '积分认领凭证不存在或已失效' };
   const cleanSid = String(studentId || claim.claimedByStudentId || '').trim();
-  const cleanName = String(helperName || '').trim();
-  if (!cleanSid) return { ok: false, msg: '请填写您的学号（作为积分归属唯一凭证）' };
+  const cleanName = String(helperName || '').trim().slice(0, 40);
+  const cleanComment = String(commentText || '').trim().slice(0, 300);
+  const cleanImg = String(commentImage || '').trim();
 
-  // 若已自动计分或已认领过同一学号，仅更新展示名称/称号，不重复加分
+  const histRec = store.bountyHistory.find((h) => h && (h.claimToken === tokenKey || h.id === tokenKey));
+
+  // 已自动入榜（如已登录 ISHIT 主账号）或已认领过同一学号：锁定身份，仅更新留言/图片（未锁定时允许更新称号）
   if (claim.claimed) {
-    if (claim.claimedByStudentId && String(claim.claimedByStudentId) !== cleanSid) {
+    if (claim.claimedByStudentId && cleanSid && String(claim.claimedByStudentId) !== cleanSid) {
       return { ok: false, msg: '该次协助积分已被认领，请勿重复提交' };
     }
+    const targetSid = String(claim.claimedByStudentId || cleanSid || '').trim();
     store.helperLeaderboard = store.helperLeaderboard || {};
-    const existing = store.helperLeaderboard[cleanSid];
-    if (existing && cleanName) {
+    const existing = targetSid ? store.helperLeaderboard[targetSid] : null;
+    if (!claim.lockedIdentity && existing && cleanName) {
       existing.names = [cleanName, ...(existing.names || []).filter((n) => n && n !== cleanName)];
       existing.preferredName = cleanName;
       claim.claimedByName = cleanName;
-      saveStore();
-      const formatted = getFormattedLeaderboard().find((e) => String(e.studentId) === cleanSid || String(e.key) === cleanSid);
-      return { ok: true, entry: formatted || existing, points: Number(claim.points || 0), updatedAliasOnly: true };
+      if (histRec) histRec.helperName = cleanName;
     }
-    return { ok: false, msg: '该次协助积分已被认领，请勿重复提交' };
+    if (cleanComment) {
+      claim.commentText = cleanComment;
+      if (histRec) histRec.commentText = cleanComment;
+    }
+    if (cleanImg) {
+      claim.commentImage = cleanImg;
+      if (histRec) histRec.commentImage = cleanImg;
+    }
+    saveStore();
+    const formatted = targetSid
+      ? getFormattedLeaderboard().find((e) => String(e.studentId) === targetSid || String(e.key) === targetSid)
+      : null;
+    return {
+      ok: true,
+      entry: formatted || existing || null,
+      points: Number(claim.points || 0),
+      updatedAliasOnly: true,
+      bountyHistory: getFormattedBountyHistory(),
+    };
+  }
+
+  // 未登录用户：如果没填学号，但填了留言/图片/昵称，允许仅保存留言记录
+  if (!cleanSid) {
+    if (!cleanComment && !cleanImg && !cleanName) {
+      return { ok: false, msg: '请填写学号以认领积分，或填写留言内容' };
+    }
+    if (cleanName) {
+      claim.claimedByName = cleanName;
+      if (histRec) histRec.helperName = cleanName;
+    }
+    if (cleanComment) {
+      claim.commentText = cleanComment;
+      if (histRec) histRec.commentText = cleanComment;
+    }
+    if (cleanImg) {
+      claim.commentImage = cleanImg;
+      if (histRec) histRec.commentImage = cleanImg;
+    }
+    saveStore();
+    return {
+      ok: true,
+      entry: null,
+      points: 0,
+      commentSavedOnly: true,
+      bountyHistory: getFormattedBountyHistory(),
+    };
   }
 
   const entry = creditHelperPointsToStudent({
@@ -909,11 +963,27 @@ function claimHelperPointsByToken({ claimToken = '', helperName = '', studentId 
   });
   claim.claimed = true;
   claim.claimedByStudentId = cleanSid;
-  claim.claimedByName = cleanName;
+  claim.claimedByName = cleanName || cleanSid;
   claim.claimedAt = Date.now();
+  if (cleanComment) claim.commentText = cleanComment;
+  if (cleanImg) claim.commentImage = cleanImg;
+
+  if (histRec) {
+    histRec.helperName = cleanName || entry?.displayName || cleanSid;
+    histRec.helperStudentId = cleanSid;
+    histRec.pointsClaimed = true;
+    if (cleanComment) histRec.commentText = cleanComment;
+    if (cleanImg) histRec.commentImage = cleanImg;
+  }
+
   saveStore();
   const formatted = getFormattedLeaderboard().find((e) => String(e.studentId) === cleanSid || String(e.key) === cleanSid);
-  return { ok: true, entry: formatted || entry, points: Number(claim.points || 0) };
+  return {
+    ok: true,
+    entry: formatted || entry,
+    points: Number(claim.points || 0),
+    bountyHistory: getFormattedBountyHistory(),
+  };
 }
 
 function getFormattedLeaderboard() {
@@ -3422,6 +3492,7 @@ module.exports = {
   creditHelperPointsToStudent,
   claimHelperPointsByToken,
   getFormattedLeaderboard,
+  getFormattedBountyHistory,
   syncActiveBountiesNow,
   getActiveBountiesForUser,
   solveSlideCaptchaX,

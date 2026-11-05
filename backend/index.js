@@ -102,7 +102,9 @@ class EncryptionUtil {
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const STORE_FILE = path.join(DATA_DIR, 'store.json');
+const COMMENT_IMAGES_DIR = path.join(DATA_DIR, 'comment_images');
 fs.mkdirSync(DATA_DIR, { recursive: true });
+fs.mkdirSync(COMMENT_IMAGES_DIR, { recursive: true });
 
 function createDefaultUserProfile() {
   return {
@@ -157,6 +159,7 @@ const defaultStore = {
   helperSessions: [],
   helperLeaderboard: {},
   helperClaims: {},
+  bountyHistory: [],
   recentAlerts: [],
   pendingCaptchas: {},
   schedule: {
@@ -194,6 +197,7 @@ if (fs.existsSync(STORE_FILE)) {
       userProfiles: loaded.userProfiles || {},
       helperLeaderboard: loaded.helperLeaderboard || {},
       helperClaims: loaded.helperClaims || {},
+      bountyHistory: Array.isArray(loaded.bountyHistory) ? loaded.bountyHistory.slice(0, 100) : [],
       recentAlerts: Array.isArray(loaded.recentAlerts) ? loaded.recentAlerts.slice(0, 80) : [],
       locationPresets: Array.isArray(loaded.locationPresets) && loaded.locationPresets.length > 0
         ? loaded.locationPresets
@@ -479,6 +483,8 @@ async function cxRequest(urlStr, {
 module.exports = {
   Constant,
   EncryptionUtil,
+  DATA_DIR,
+  COMMENT_IMAGES_DIR,
   store,
   saveStore,
   createDefaultUserProfile,

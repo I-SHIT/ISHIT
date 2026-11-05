@@ -853,10 +853,15 @@ function creditHelperPointsToStudent({
     if (matchedAcc.studentId && !existing.studentId) existing.studentId = String(matchedAcc.studentId);
   }
 
-  const aliasCandidates = [String(helperName || '').trim(), String(matchedAcc?.name || '').trim()].filter(Boolean);
+  const customAlias = String(helperName || '').trim();
+  const cxAlias = String(matchedAcc?.name || '').trim();
   existing.names = Array.isArray(existing.names) ? existing.names : [];
-  for (const alias of aliasCandidates) {
-    if (!existing.names.includes(alias)) existing.names.push(alias);
+  if (customAlias) {
+    existing.names = [customAlias, ...existing.names.filter((n) => n && n !== customAlias)];
+    existing.preferredName = customAlias;
+  }
+  if (cxAlias && !existing.names.includes(cxAlias)) {
+    existing.names.push(cxAlias);
   }
 
   existing.score = Number(existing.score || 0) + pts;
@@ -873,10 +878,27 @@ function claimHelperPointsByToken({ claimToken = '', helperName = '', studentId 
   store.helperClaims = store.helperClaims || {};
   const claim = store.helperClaims[String(claimToken || '').trim()];
   if (!claim) return { ok: false, msg: '积分认领凭证不存在或已失效' };
-  if (claim.claimed) return { ok: false, msg: '该次协助积分已被认领，请勿重复提交' };
-  const cleanSid = String(studentId || '').trim();
+  const cleanSid = String(studentId || claim.claimedByStudentId || '').trim();
   const cleanName = String(helperName || '').trim();
   if (!cleanSid) return { ok: false, msg: '请填写您的学号（作为积分归属唯一凭证）' };
+
+  // 若已自动计分或已认领过同一学号，仅更新展示名称/称号，不重复加分
+  if (claim.claimed) {
+    if (claim.claimedByStudentId && String(claim.claimedByStudentId) !== cleanSid) {
+      return { ok: false, msg: '该次协助积分已被认领，请勿重复提交' };
+    }
+    store.helperLeaderboard = store.helperLeaderboard || {};
+    const existing = store.helperLeaderboard[cleanSid];
+    if (existing && cleanName) {
+      existing.names = [cleanName, ...(existing.names || []).filter((n) => n && n !== cleanName)];
+      existing.preferredName = cleanName;
+      claim.claimedByName = cleanName;
+      saveStore();
+      const formatted = getFormattedLeaderboard().find((e) => String(e.studentId) === cleanSid || String(e.key) === cleanSid);
+      return { ok: true, entry: formatted || existing, points: Number(claim.points || 0), updatedAliasOnly: true };
+    }
+    return { ok: false, msg: '该次协助积分已被认领，请勿重复提交' };
+  }
 
   const entry = creditHelperPointsToStudent({
     studentId: cleanSid,
@@ -890,7 +912,8 @@ function claimHelperPointsByToken({ claimToken = '', helperName = '', studentId 
   claim.claimedByName = cleanName;
   claim.claimedAt = Date.now();
   saveStore();
-  return { ok: true, entry, points: Number(claim.points || 0) };
+  const formatted = getFormattedLeaderboard().find((e) => String(e.studentId) === cleanSid || String(e.key) === cleanSid);
+  return { ok: true, entry: formatted || entry, points: Number(claim.points || 0) };
 }
 
 function getFormattedLeaderboard() {
@@ -904,13 +927,14 @@ function getFormattedLeaderboard() {
     );
     const cxName = matchedAcc?.name || item.cxName || '';
     const names = Array.isArray(item.names) ? [...item.names] : [];
-    if (cxName && !names.includes(cxName)) names.unshift(cxName);
+    if (cxName && !names.includes(cxName)) names.push(cxName);
+    const preferred = item.preferredName || names[0] || cxName || sid || '匿名侠客';
     return {
       key: item.key || sid || uid,
       studentId: sid || matchedAcc?.studentId || '',
       boundUid: matchedAcc?.uid || uid || '',
       cxName: cxName || names[0] || '匿名侠客',
-      displayName: names[0] || cxName || sid || '匿名侠客',
+      displayName: preferred,
       names,
       avatar: matchedAcc?.avatar || item.avatar || (matchedAcc?.uid ? `https://photo.chaoxing.com/p/${matchedAcc.uid}_80` : ''),
       school: matchedAcc?.school || item.school || '',

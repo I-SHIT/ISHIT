@@ -1855,11 +1855,14 @@ const server = http.createServer(async (req, res) => {
         let claimToken = '';
 
         if (earnedPoints > 0) {
+          claimToken = EncryptionUtil.getUniqueId();
+          store.helperClaims = store.helperClaims || {};
           const explicitSid = String(body.studentId || '').trim();
           if (helperAcc || explicitSid) {
-            // 已登录 ISHIT 主账号或已直接提供学号 -> 自动归入该主账号/学号名下
+            // 已登录 ISHIT 主账号或已直接提供学号 -> 自动归入该主账号/学号名下，并支持事后在弹窗修改自定义称号
+            const targetSid = explicitSid || helperAcc?.studentId || helperAcc?.uid || '';
             creditedEntry = creditHelperPointsToStudent({
-              studentId: explicitSid || helperAcc?.studentId || helperAcc?.uid || '',
+              studentId: targetSid,
               helperName: body.helperName || helperAcc?.name || currentSess?.username || '',
               cxAccount: helperAcc,
               points: earnedPoints,
@@ -1867,10 +1870,20 @@ const server = http.createServer(async (req, res) => {
               courseName: hs.courseName,
             });
             autoCredited = Boolean(creditedEntry);
+            store.helperClaims[claimToken] = {
+              claimToken,
+              points: earnedPoints,
+              activeId: hs.activeId,
+              courseName: hs.courseName,
+              helpedNames: newlyCreditedUsers.map((u) => u.name || u.uid),
+              createdAt: Date.now(),
+              claimed: autoCredited,
+              autoCredited: autoCredited,
+              claimedByStudentId: String(targetSid),
+              claimedByName: String(body.helperName || helperAcc?.name || ''),
+            };
           } else {
-            // 未登录 ISHIT -> 生成事后认领凭证，允许在结果页填写名称+学号入榜
-            claimToken = EncryptionUtil.getUniqueId();
-            store.helperClaims = store.helperClaims || {};
+            // 未登录 ISHIT -> 生成事后认领凭证，在签到成功弹窗中填写名称+学号入榜
             store.helperClaims[claimToken] = {
               claimToken,
               points: earnedPoints,
@@ -1879,6 +1892,7 @@ const server = http.createServer(async (req, res) => {
               helpedNames: newlyCreditedUsers.map((u) => u.name || u.uid),
               createdAt: Date.now(),
               claimed: false,
+              autoCredited: false,
             };
           }
         }

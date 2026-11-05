@@ -280,6 +280,26 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
+function setHtmlIfChanged(el, html, sig = html) {
+  if (!el) return false;
+  if (el._lastRenderSig === sig) return false;
+  el._lastRenderSig = sig;
+  el.innerHTML = html;
+  return true;
+}
+
+function updateRemainTagsInPlace(container) {
+  if (!container) return;
+  const now = Date.now();
+  container.querySelectorAll('.js-remain-tag[data-end-ms]').forEach((tag) => {
+    const endMs = Number(tag.getAttribute('data-end-ms') || 0);
+    if (endMs > now) {
+      const remainSec = Math.max(0, Math.round((endMs - now) / 1000));
+      tag.textContent = `剩余 ${remainSec >= 60 ? Math.floor(remainSec / 60) + '分' + (remainSec % 60) + '秒' : remainSec + '秒'}`;
+    }
+  });
+}
+
 let modalZCounter = 1000;
 function openModal(id) {
   const el = document.getElementById(id);
@@ -606,10 +626,10 @@ function renderPanelUsersList(users, currentUsername) {
   const box = document.getElementById('panelUsersListContainer');
   if (!box) return;
   if (!users || users.length === 0) {
-    box.innerHTML = `<div class="empty">暂无网站用户</div>`;
+    setHtmlIfChanged(box, `<div class="empty">暂无网站用户</div>`);
     return;
   }
-  box.innerHTML = users
+  const usersHtml = users
     .map((u) => {
       const isAdmin = u.role === 'admin' || u.username === 'ishit';
       const boundAccs = u.boundAccounts || [];
@@ -636,6 +656,7 @@ function renderPanelUsersList(users, currentUsername) {
       `;
     })
     .join('');
+  setHtmlIfChanged(box, usersHtml);
 }
 
 async function createPanelUser() {
@@ -823,9 +844,9 @@ function renderUserSwitcher(data) {
           })
           .join('');
   const sel = document.getElementById('globalUserSelect');
-  if (sel) sel.innerHTML = html;
+  if (sel && document.activeElement !== sel) setHtmlIfChanged(sel, html);
   const winSel = document.getElementById('winSidebarUserSelect');
-  if (winSel) winSel.innerHTML = html;
+  if (winSel && document.activeElement !== winSel) setHtmlIfChanged(winSel, html);
 }
 
 function renderOverview(data, syncInputs) {
@@ -858,7 +879,7 @@ function renderOverview(data, syncInputs) {
   const caps = data.pendingCaptchas || [];
   if (caps.length > 0) {
     capSec.style.display = 'block';
-    capList.innerHTML = caps
+    const capHtml = caps
       .map(
         (c) => `
       <div class="list-row">
@@ -873,17 +894,35 @@ function renderOverview(data, syncInputs) {
       </div>`
       )
       .join('');
+    setHtmlIfChanged(capList, capHtml);
   } else {
     capSec.style.display = 'none';
   }
 
-  // 活动监测列表（与签到悬赏池双向 SSOT 高同步，已签/截止实时剔除防重签）
+  // 活动监测列表（与签到悬赏池双向 SSOT 高同步，已签/截止实时剔除防重签，签名防抖杜绝闪烁）
   const radarEl = document.getElementById('activeRadarList');
   const actives = data.lastDetectedActives || [];
   if (actives.length === 0) {
-    radarEl.innerHTML = `<div class="empty">暂无待处理签到活动（已签或截止活动自动下榜防重签）</div>`;
+    setHtmlIfChanged(radarEl, `<div class="empty">暂无待处理签到活动（已签或截止活动自动下榜防重签）</div>`, 'empty');
   } else {
-    radarEl.innerHTML = actives
+    const radarSig = JSON.stringify(
+      actives.map((item) => {
+        const act = item.active || item;
+        return [
+          act.id,
+          item.courseId,
+          item.classId,
+          act.signedCount ?? act.attendNum ?? 0,
+          act.totalCount || 0,
+          Boolean(act.waitingThreshold),
+          act.endTimeMs || 0,
+          item.helperToken || '',
+          item.pendingNames || [],
+          item.succeededNames || [],
+        ];
+      })
+    );
+    const radarHtml = actives
       .map((item) => {
         const act = item.active || item;
         const signedNum = act.signedCount ?? act.attendNum ?? 0;
@@ -898,7 +937,7 @@ function renderOverview(data, syncInputs) {
           ? Math.max(0, Math.round((act.endTimeMs - Date.now()) / 1000))
           : null;
         const remainBadge = remainSec !== null
-          ? `<span class="tag" style="margin-left:6px; color:#dc2626; border-color:#fecaca;">剩余 ${remainSec >= 60 ? Math.floor(remainSec / 60) + '分' + (remainSec % 60) + '秒' : remainSec + '秒'}</span>`
+          ? `<span class="tag js-remain-tag" data-end-ms="${Number(act.endTimeMs || 0)}" style="margin-left:6px; color:#dc2626; border-color:#fecaca;">剩余 ${remainSec >= 60 ? Math.floor(remainSec / 60) + '分' + (remainSec % 60) + '秒' : remainSec + '秒'}</span>`
           : '';
         const pendingNames = Array.isArray(item.pendingNames) ? item.pendingNames : [];
         const succeededNames = Array.isArray(item.succeededNames) ? item.succeededNames : [];
@@ -938,12 +977,15 @@ function renderOverview(data, syncInputs) {
       </div>`;
       })
       .join('');
+    if (!setHtmlIfChanged(radarEl, radarHtml, radarSig)) {
+      updateRemainTagsInPlace(radarEl);
+    }
   }
 
   // 历史记录
   const histEl = document.getElementById('historyList');
   const hist = data.history || [];
-  histEl.innerHTML = hist.length
+  const histHtml = hist.length
     ? hist
         .map((h) => {
           const summary = (h.results || []).map((r) => `${r.name}:${r.msg}`).join(' / ');
@@ -957,11 +999,12 @@ function renderOverview(data, syncInputs) {
         })
         .join('')
     : `<div class="empty">暂无记录</div>`;
+  setHtmlIfChanged(histEl, histHtml);
 
   // 运行日志
   const logsEl = document.getElementById('logsBox');
   const logList = data.logs || [];
-  logsEl.innerHTML = logList.length
+  const logsHtml = logList.length
     ? logList
         .map((l) =>
           typeof l === "string"
@@ -970,6 +1013,7 @@ function renderOverview(data, syncInputs) {
         )
         .join('')
     : `<div class="empty">暂无相关日志</div>`;
+  setHtmlIfChanged(logsEl, logsHtml);
 }
 
 function renderPollingModeButtons(isContinuous) {
@@ -1085,12 +1129,12 @@ function renderOverviewTestCourses(courses) {
     return true;
   });
   if (testCourses.length === 0) {
-    box.innerHTML = `<div class="list-row" style="padding:8px 0;">
+    setHtmlIfChanged(box, `<div class="list-row" style="padding:8px 0;">
       <span style="font-size:11px; color:var(--muted);">测试课程：暂未设置（在「课程」列表中将课程设为测试课程后，不受轮询模式与课表限制，可随时独立开关轮询）</span>
-    </div>`;
+    </div>`);
     return;
   }
-  box.innerHTML = testCourses
+  const testHtml = testCourses
     .map((c) => {
       const cName = c.name || c.courseName || '未知课程';
       const testEnabled = c.settings?.testPollingEnabled !== false;
@@ -1110,13 +1154,14 @@ function renderOverviewTestCourses(courses) {
       </div>`;
     })
     .join('');
+  setHtmlIfChanged(box, testHtml);
 }
 
 function renderCoursesList(courses) {
   const box = document.getElementById('coursesListContainer');
   if (!box) return;
   if (!courses || courses.length === 0) {
-    box.innerHTML = `<div class="empty">暂无课程，请先登录账号或点击同步课程</div>`;
+    setHtmlIfChanged(box, `<div class="empty">暂无课程，请先登录账号或点击同步课程</div>`);
     return;
   }
   const canEdit = canEditSelectedAccount();
@@ -1156,7 +1201,7 @@ function renderCoursesList(courses) {
 
   const sorted = [...courses].sort((a, b) => Number(Boolean(b.settings?.isTestCourse)) - Number(Boolean(a.settings?.isTestCourse)));
 
-  box.innerHTML =
+  const coursesHtml =
     modeBanner +
     sorted
       .map((c) => {
@@ -1200,6 +1245,7 @@ function renderCoursesList(courses) {
       </div>`;
       })
       .join('');
+  setHtmlIfChanged(box, coursesHtml);
 }
 
 async function batchToggleCoursePolling(pollingEnabled) {
@@ -2341,14 +2387,14 @@ function renderLocationPresets(presets) {
   const box = document.getElementById('locationPresetsList');
   if (!box) return;
   if (!presets || presets.length === 0) {
-    box.innerHTML = `<div class="empty">暂无常用预设</div>`;
+    setHtmlIfChanged(box, `<div class="empty">暂无常用预设</div>`);
     return;
   }
   const isAdmin = isCurrentPanelAdmin();
   const curUser = getCurrentPanelUsername();
   const canEditSelected = canEditSelectedAccount();
 
-  box.innerHTML = presets
+  const presetsHtml = presets
     .map((p) => {
       const creator = p.createdBy || 'ishit';
       const canModifyPreset = isAdmin || !p.createdBy || p.createdBy === curUser;
@@ -2369,6 +2415,7 @@ function renderLocationPresets(presets) {
     </div>`;
     })
     .join('');
+  setHtmlIfChanged(box, presetsHtml);
 }
 
 function openEditLocationPresetModal(id) {
@@ -2622,13 +2669,13 @@ function renderAccountsList(accounts, currentUid) {
   const box = document.getElementById('accountsListContainer');
   if (!box) return;
   if (!accounts || accounts.length === 0) {
-    box.innerHTML = `<div class="empty">暂无已登录账号</div>`;
+    setHtmlIfChanged(box, `<div class="empty">暂无已登录账号</div>`);
     return;
   }
   const isAdmin = isCurrentPanelAdmin();
   const curUser = getCurrentPanelUsername();
 
-  box.innerHTML = accounts
+  const accountsHtml = accounts
     .map((a) => {
       const owner = a.ownerUsername || 'ishit';
       const isMine = isAdmin || owner === curUser;
@@ -2656,6 +2703,7 @@ function renderAccountsList(accounts, currentUid) {
     </div>`;
     })
     .join('');
+  setHtmlIfChanged(box, accountsHtml);
 }
 
 async function uploadAccountFacePhoto(uid, inputEl) {
@@ -3135,9 +3183,26 @@ function renderBountyAndLeaderboard(data) {
   const bountyBox = document.getElementById('bountyBoardList');
   if (bountyBox) {
     if (bounties.length === 0) {
-      bountyBox.innerHTML = `<div class="empty" style="padding:24px 14px;">暂无未完成签到</div>`;
+      setHtmlIfChanged(bountyBox, `<div class="empty" style="padding:24px 14px;">暂无未完成签到</div>`, 'empty');
     } else {
-      bountyBox.innerHTML = bounties
+      const bountySig = JSON.stringify(
+        bounties.map((b) => [
+          b.token,
+          b.activeId,
+          b.includesMe,
+          b.isMyCourse,
+          b.signType,
+          b.signedCount || 0,
+          b.totalCount || 0,
+          b.endTimeMs || 0,
+          b.designatedPlace || '',
+          b.locationRange || '',
+          b.failReason || '',
+          b.pendingNames || [],
+          b.succeededNames || [],
+        ])
+      );
+      const bountyHtml = bounties
         .map((b) => {
           const cardCls = b.includesMe
             ? 'bounty-card bounty-mine'
@@ -3159,7 +3224,7 @@ function renderBountyAndLeaderboard(data) {
             ? Math.max(0, Math.round((b.endTimeMs - Date.now()) / 1000))
             : null;
           const remainHtml = remainSec !== null
-            ? `<span class="tag" style="color:#dc2626; border-color:#fecaca;">剩余 ${remainSec >= 60 ? Math.floor(remainSec / 60) + '分' + (remainSec % 60) + '秒' : remainSec + '秒'}</span>`
+            ? `<span class="tag js-remain-tag" data-end-ms="${Number(b.endTimeMs || 0)}" style="color:#dc2626; border-color:#fecaca;">剩余 ${remainSec >= 60 ? Math.floor(remainSec / 60) + '分' + (remainSec % 60) + '秒' : remainSec + '秒'}</span>`
             : '';
           const placeHtml = b.designatedPlace
             ? `<div style="font-size:12px; color:#b45309; margin-top:4px; font-weight:600;">要求位置：${escapeHtml(b.designatedPlace)}${b.locationRange ? `（${escapeHtml(String(b.locationRange))}m内）` : ''}</div>`
@@ -3199,15 +3264,32 @@ function renderBountyAndLeaderboard(data) {
           </div>`;
         })
         .join('');
+      if (!setHtmlIfChanged(bountyBox, bountyHtml, bountySig)) {
+        updateRemainTagsInPlace(bountyBox);
+      }
     }
   }
 
   const lbBox = document.getElementById('masterLeaderboardList');
   if (lbBox) {
     if (leaderboard.length === 0) {
-      lbBox.innerHTML = `<div class="empty" style="padding:24px 14px;">暂无排行记录</div>`;
+      setHtmlIfChanged(lbBox, `<div class="empty" style="padding:24px 14px;">暂无排行记录</div>`, 'empty');
     } else {
-      lbBox.innerHTML = leaderboard
+      const lbSig = JSON.stringify(
+        leaderboard.map((item, idx) => [
+          item.key || '',
+          item.rank || idx + 1,
+          item.displayName || '',
+          item.cxName || '',
+          item.studentId || '',
+          item.school || '',
+          item.avatar || '',
+          Number(item.score || 0),
+          item.lastCourseName || '',
+          item.names || [],
+        ])
+      );
+      const lbHtml = leaderboard
         .map((item, idx) => {
           const rank = item.rank || idx + 1;
           const rankCls = rank <= 3 ? `leaderboard-rank rank-${rank}` : 'leaderboard-rank';
@@ -3246,6 +3328,7 @@ function renderBountyAndLeaderboard(data) {
           </div>`;
         })
         .join('');
+      setHtmlIfChanged(lbBox, lbHtml, lbSig);
     }
   }
 }
@@ -3572,16 +3655,12 @@ async function initHelperMode(token) {
   document.getElementById('helpTitle').textContent = res.session.title || '课堂签到互助';
 
   const idBanner = document.getElementById('helpIdentityBanner');
-  const helperNameInput = document.getElementById('helpHelperName');
   if (idBanner) {
     if (res.helperPrimaryAccount) {
       const p = res.helperPrimaryAccount;
-      idBanner.innerHTML = `当前辅助账号：<strong>${escapeHtml(p.name)}</strong>${p.studentId ? `（${escapeHtml(p.studentId)}）` : ''}，帮签成功自动计分。`;
-      if (helperNameInput && (!helperNameInput.value || helperNameInput.value === '热心同学' || helperNameInput.value === '同学')) {
-        helperNameInput.value = p.name;
-      }
+      idBanner.innerHTML = `当前辅助账号：<strong>${escapeHtml(p.name)}</strong>${p.studentId ? `（${escapeHtml(p.studentId)}）` : ''}，签到成功后可修改名称并计分。`;
     } else {
-      idBanner.innerHTML = `按成功帮签人数计分，提交后可填写名称与学号领分。`;
+      idBanner.innerHTML = `按成功帮签人数计分，签到成功后将弹窗填写辅助人名称与学号。`;
     }
   }
 
@@ -3698,10 +3777,11 @@ async function submitHelperSign(retryFailedOnly = false) {
   }
 
   try {
+    const savedName = localStorage.getItem('ishit_helper_name') || state.helperPrimaryAccount?.name || '热心同学';
     const res = await api('/api/helper/submit', 'POST', {
       token: state.helperToken,
       retryFailedOnly: Boolean(retryFailedOnly),
-      helperName: document.getElementById('helpHelperName')?.value.trim() || '热心同学',
+      helperName: savedName,
       signCode: document.getElementById('helpSignCode')?.value.trim() || null,
       qrUrl: document.getElementById('helpQrUrl')?.value.trim() || null,
       address: document.getElementById('helpAddress')?.value.trim() || null,
@@ -3763,22 +3843,26 @@ async function submitHelperSign(retryFailedOnly = false) {
     if (Number(res.earnedPoints || 0) > 0) {
       if (res.autoCredited && res.creditedEntry) {
         pointsCardHtml = `
-        <div class="helper-claim-card" style="background:#f0fdf4; border-color:#86efac;">
-          <div style="font-weight:700; color:#166534;">积分 +${res.earnedPoints} 已自动计入</div>
-          <div style="font-size:12px; color:#15803d; margin-top:3px;">
-            已归入 <strong>${escapeHtml(res.creditedEntry.displayName)}</strong>（学号：${escapeHtml(res.creditedEntry.studentId)}） · 当前累计总分：<strong>${res.creditedEntry.score} 分</strong>
+        <div class="helper-claim-card" id="helperClaimCardBox" style="background:#f0fdf4; border-color:#86efac;">
+          <div class="row" style="justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+            <div>
+              <div style="font-weight:700; color:#166534;">积分 +${res.earnedPoints} 已计入排行榜</div>
+              <div style="font-size:12px; color:#15803d; margin-top:3px;">
+                辅助人：<strong>${escapeHtml(res.creditedEntry.displayName)}</strong>（学号：${escapeHtml(res.creditedEntry.studentId)}） · 总分：<strong>${res.creditedEntry.score} 分</strong>
+              </div>
+            </div>
+            ${res.claimToken ? `<button type="button" class="btn btn-ghost btn-sm" onclick="openHelperClaimModal('${escapeHtml(res.claimToken)}', ${Number(res.earnedPoints || 0)}, true, '${escapeHtml(res.creditedEntry.displayName || '')}', '${escapeHtml(res.creditedEntry.studentId || '')}')">修改辅助人名称</button>` : ''}
           </div>
         </div>`;
       } else if (res.claimToken) {
-        const defaultName = document.getElementById('helpHelperName')?.value.trim() || '';
         pointsCardHtml = `
         <div class="helper-claim-card" id="helperClaimCardBox">
-          <div style="font-weight:700; font-size:13px;">本次成功帮签 +${res.earnedPoints} 人，填写名称与学号可计入排行榜：</div>
-          <div style="font-size:11px; color:var(--muted); margin-top:2px;">积分归属该学号，支持使用不同名称</div>
-          <div class="row" style="margin-top:8px; gap:6px; flex-wrap:wrap;">
-            <input id="claimHelperNameInput" value="${escapeHtml(defaultName)}" placeholder="名称" style="flex:1; min-width:120px;" />
-            <input id="claimStudentIdInput" placeholder="学号（必填）" style="flex:1; min-width:130px;" />
-            <button type="button" class="btn btn-sm" onclick="submitHelperPointClaim('${escapeHtml(res.claimToken)}')">领取 +${res.earnedPoints} 分</button>
+          <div class="row" style="justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+            <div>
+              <div style="font-weight:700; font-size:13px;">本次成功帮签 +${res.earnedPoints} 人</div>
+              <div style="font-size:11px; color:var(--muted); margin-top:2px;">填写辅助人名称与学号即可计入签到大师榜</div>
+            </div>
+            <button type="button" class="btn btn-sm" onclick="openHelperClaimModal('${escapeHtml(res.claimToken)}', ${Number(res.earnedPoints || 0)}, false)">填写辅助人名称 (+${res.earnedPoints}分)</button>
           </div>
         </div>`;
       }
@@ -3794,6 +3878,16 @@ async function submitHelperSign(retryFailedOnly = false) {
       </div>`;
     }
     showToast(allDone ? '全部签到成功' : remainingNames.length > 0 ? `部分未签上（剩余 ${remainingNames.length} 人需重试）` : '提交完成');
+
+    if (Number(res.earnedPoints || 0) > 0 && res.claimToken) {
+      openHelperClaimModal(
+        res.claimToken,
+        Number(res.earnedPoints || 0),
+        Boolean(res.autoCredited),
+        res.creditedEntry?.displayName || state.helperPrimaryAccount?.name || '',
+        res.creditedEntry?.studentId || state.helperPrimaryAccount?.studentId || ''
+      );
+    }
   } finally {
     if (submitBtn) {
       submitBtn.disabled = false;
@@ -3802,13 +3896,47 @@ async function submitHelperSign(retryFailedOnly = false) {
   }
 }
 
-async function submitHelperPointClaim(claimToken) {
-  const helperName = document.getElementById('claimHelperNameInput')?.value.trim() || '热心同学';
-  const studentId = document.getElementById('claimStudentIdInput')?.value.trim() || '';
+function openHelperClaimModal(claimToken, earnedPoints = 1, isAutoCredited = false, defaultName = '', defaultSid = '') {
+  const tokenEl = document.getElementById('claimModalTokenInput');
+  const sumEl = document.getElementById('claimModalSummaryText');
+  const nameEl = document.getElementById('claimModalHelperName');
+  const sidEl = document.getElementById('claimModalStudentId');
+  if (tokenEl) tokenEl.value = claimToken || '';
+  if (sumEl) {
+    sumEl.textContent = isAutoCredited
+      ? `成功帮签 +${earnedPoints} 人（积分已入账），可在此自定义你的辅助人名称：`
+      : `成功帮签 +${earnedPoints} 人，请填写辅助人名称与学号计入排行榜：`;
+  }
+  const savedName = localStorage.getItem('ishit_helper_name') || defaultName || '';
+  const savedSid = defaultSid || localStorage.getItem('ishit_helper_sid') || '';
+  if (nameEl) nameEl.value = savedName;
+  if (sidEl) {
+    sidEl.value = savedSid;
+    sidEl.readOnly = Boolean(isAutoCredited && defaultSid);
+  }
+  openModal('helperClaimModal');
+  setTimeout(() => {
+    if (nameEl) nameEl.focus();
+  }, 60);
+}
+
+async function submitHelperPointClaim(explicitToken) {
+  const claimToken = explicitToken || document.getElementById('claimModalTokenInput')?.value.trim() || '';
+  const helperName =
+    document.getElementById('claimModalHelperName')?.value.trim() ||
+    document.getElementById('claimHelperNameInput')?.value.trim() ||
+    '热心同学';
+  const studentId =
+    document.getElementById('claimModalStudentId')?.value.trim() ||
+    document.getElementById('claimStudentIdInput')?.value.trim() ||
+    '';
   if (!studentId) {
     showToast('请输入你的学号以绑定签到大师积分');
     return;
   }
+  localStorage.setItem('ishit_helper_name', helperName);
+  localStorage.setItem('ishit_helper_sid', studentId);
+
   const res = await api('/api/helper/claim', 'POST', {
     claimToken,
     helperName,
@@ -3816,18 +3944,19 @@ async function submitHelperPointClaim(claimToken) {
   });
   const card = document.getElementById('helperClaimCardBox');
   if (res.ok && res.entry) {
+    closeModal('helperClaimModal');
     if (card) {
       card.style.background = '#f0fdf4';
       card.style.borderColor = '#86efac';
       card.innerHTML = `
         <div style="font-weight:700; color:#166534;">积分已计入排行榜</div>
         <div style="font-size:12px; color:#15803d; margin-top:3px;">
-          称号：<strong>${escapeHtml(res.entry.displayName)}</strong> · 学号：<strong>${escapeHtml(res.entry.studentId)}</strong> · 累计总分：<strong>${res.entry.score} 分</strong>
+          辅助人：<strong>${escapeHtml(res.entry.displayName)}</strong> · 学号：<strong>${escapeHtml(res.entry.studentId)}</strong> · 累计总分：<strong>${res.entry.score} 分</strong>
         </div>`;
     }
     showToast(`已计入排行榜，当前总分 ${res.entry.score} 分`);
   } else {
-    showToast(res.msg || '认领失败');
+    showToast(res.msg || '提交失败');
   }
 }
 

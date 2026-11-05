@@ -105,13 +105,6 @@
         </div>
       </div>
 
-      <div class="row" style="margin-top:10px; gap:8px; align-items:center;">
-        <div style="flex:1;">
-          <label style="margin-top:0;">辅助人名称（可选）</label>
-          <input id="helpHelperName" value="热心同学" placeholder="输入你的称号或姓名" />
-        </div>
-      </div>
-
       <button type="button" class="btn helper-submit-giant-btn" id="helpMainSubmitBtn" onclick="submitHelperSign(false)">提交签到</button>
       <div id="helpResultBox" style="margin-top:14px;"></div>
     </div>
@@ -1123,7 +1116,29 @@
 
 
 
-<script src="app.js?v=21"></script>
+<!-- 弹窗 11：签到成功后辅助人名称与学号登记弹窗 -->
+<div id="helperClaimModal" class="backdrop">
+  <div class="dialog" style="max-width:400px;">
+    <div class="panel-head">
+      <span class="panel-title">填写辅助人名称</span>
+      <button class="btn btn-ghost btn-sm" onclick="closeModal('helperClaimModal')">关闭</button>
+    </div>
+    <input type="hidden" id="claimModalTokenInput" />
+    <div id="claimModalSummaryText" style="font-size:13px; font-weight:600; color:#166534; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:8px; padding:8px 10px; margin-bottom:10px;">
+      签到成功，填写名称与学号计入签到大师榜
+    </div>
+    <label style="margin-top:4px;">辅助人名称</label>
+    <input id="claimModalHelperName" placeholder="输入你的名称或昵称" />
+    <label style="margin-top:8px;">学号（必填，积分归属该学号，支持使用不同名称）</label>
+    <input id="claimModalStudentId" placeholder="输入学号" />
+    <div class="row" style="margin-top:16px; gap:8px;">
+      <button type="button" class="btn" style="flex:2;" onclick="submitHelperPointClaim()">确认提交</button>
+      <button type="button" class="btn btn-ghost" style="flex:1;" onclick="closeModal('helperClaimModal')">暂不填写</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js?v=22"></script>
 </body>
 </html>
 

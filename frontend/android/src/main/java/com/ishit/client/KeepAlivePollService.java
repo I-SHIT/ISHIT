@@ -1,15 +1,15 @@
 package com.ishit.client;
 
 import android.app.AlarmManager;
-import android.app.Notification;
-import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.app.job.JobInfo;
+import android.app.job.JobScheduler;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.content.pm.ServiceInfo;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
@@ -28,67 +28,89 @@ import java.nio.charset.StandardCharsets;
 public class KeepAlivePollService extends Service implements Runnable {
     public static final String GUARD_CHANNEL_ID = "ishit_guard_channel";
     public static final int GUARD_NOTIFY_ID = 1001;
+    public static final int LEGACY_GUARD_NOTIFY_ID = 9901;
+    public static final int JOB_ID_KEEPALIVE = 7701;
+    public static final String ACTION_ALARM_POLL_TICK = "com.ishit.client.ALARM_POLL_TICK";
+
     private volatile boolean running = false;
     private Thread workerThread = null;
-    private boolean seededOnStartup = false;
+    private static volatile boolean sSeededOnStartup = false;
+    private static volatile int sLastBountyCount = -1;
 
     @Override
     public void onCreate() {
         super.onCreate();
-        startGuardForeground("ISHIT 签到雷达后台守护中", "正在实时监听课堂签到与悬赏状态");
+        purgeLegacyGuardNotification(this);
+        scheduleResurrectionRelay(this, 4000L);
         startWorkerLoop();
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        startGuardForeground("ISHIT 签到雷达后台守护中", "正在实时监听课堂签到与悬赏状态");
+        purgeLegacyGuardNotification(this);
+        scheduleResurrectionRelay(this, 4000L);
         startWorkerLoop();
         return START_STICKY;
     }
 
-    private void startGuardForeground(String title, String text) {
+    public static void purgeLegacyGuardNotification(Context ctx) {
+        if (ctx == null) return;
         try {
-            NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && nm != null) {
-                NotificationChannel ch = new NotificationChannel(
-                    GUARD_CHANNEL_ID,
-                    "ISHIT 后台保活守护",
-                    NotificationManager.IMPORTANCE_LOW
-                );
-                ch.setDescription("保持 ISHIT 在锁屏或切后台时仍能秒级接收签到提醒");
-                ch.enableVibration(false);
-                ch.setSound(null, null);
-                nm.createNotificationChannel(ch);
+            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null) {
+                nm.cancel(GUARD_NOTIFY_ID);
+                nm.cancel(LEGACY_GUARD_NOTIFY_ID);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    nm.deleteNotificationChannel(GUARD_CHANNEL_ID);
+                }
             }
+        } catch (Exception ignored) {
+        }
+    }
 
-            Intent clickIntent = new Intent(this, MainActivity.class);
-            clickIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+    public static void scheduleResurrectionRelay(Context ctx, long delayMs) {
+        if (ctx == null) return;
+        long safeDelay = Math.max(2500L, Math.min(15000L, delayMs));
+        Context appCtx = ctx.getApplicationContext();
+
+        // 1. JobScheduler (persisted in system_server, survives swipe-away task kill)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            try {
+                JobScheduler js = (JobScheduler) appCtx.getSystemService(Context.JOB_SCHEDULER_SERVICE);
+                if (js != null) {
+                    ComponentName comp = new ComponentName(appCtx, KeepAliveJobService.class);
+                    JobInfo.Builder jb = new JobInfo.Builder(JOB_ID_KEEPALIVE, comp)
+                        .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+                        .setMinimumLatency(safeDelay)
+                        .setOverrideDeadline(safeDelay + 4000L)
+                        .setPersisted(true);
+                    js.schedule(jb.build());
+                }
+            } catch (Exception ignored) {
+            }
+        }
+
+        // 2. AlarmManager -> BroadcastReceiver (PendingIntent.getBroadcast is allowed in background on Android 8+)
+        try {
+            Intent alarmIntent = new Intent(appCtx, BootReceiver.class);
+            alarmIntent.setAction(ACTION_ALARM_POLL_TICK);
             int piFlags = PendingIntent.FLAG_UPDATE_CURRENT;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 piFlags |= PendingIntent.FLAG_IMMUTABLE;
             }
-            PendingIntent pi = PendingIntent.getActivity(this, 1001, clickIntent, piFlags);
-
-            Notification.Builder builder;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                builder = new Notification.Builder(this, GUARD_CHANNEL_ID);
-            } else {
-                builder = new Notification.Builder(this);
-                builder.setPriority(Notification.PRIORITY_LOW);
-            }
-
-            Notification notification = builder
-                .setSmallIcon(R.drawable.ic_launcher)
-                .setContentTitle(title)
-                .setContentText(text)
-                .setOngoing(true)
-                .setContentIntent(pi)
-                .build();
-
-            if (Build.VERSION.SDK_INT >= 29) {
-                startForeground(GUARD_NOTIFY_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
-            } else {
-                startForeground(GUARD_NOTIFY_ID, notification);
+            PendingIntent pi = PendingIntent.getBroadcast(appCtx, 2027, alarmIntent, piFlags);
+            AlarmManager am = (AlarmManager) appCtx.getSystemService(Context.ALARM_SERVICE);
+            if (am != null) {
+                long triggerAt = SystemClock.elapsedRealtime() + safeDelay;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    try {
+                        am.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi);
+                    } catch (SecurityException se) {
+                        am.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi);
+                    }
+                } else {
+                    am.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi);
+                }
             }
         } catch (Exception ignored) {
         }
@@ -107,20 +129,23 @@ public class KeepAlivePollService extends Service implements Runnable {
     @Override
     public void run() {
         while (running) {
-            long sleepMs = 3500L;
+            long sleepMs = 3000L;
             try {
-                sleepMs = pollOnce();
+                sleepMs = pollOnceStatic(this);
             } catch (Exception ignored) {
             }
+            scheduleResurrectionRelay(this, sleepMs + 1500L);
             try {
-                Thread.sleep(Math.max(2000L, Math.min(15000L, sleepMs)));
+                Thread.sleep(Math.max(2000L, Math.min(8000L, sleepMs)));
             } catch (InterruptedException ignored) {
             }
         }
     }
 
-    private long pollOnce() {
-        SharedPreferences prefs = getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE);
+    public static long pollOnceStatic(Context ctx) {
+        if (ctx == null) return 4000L;
+        Context appCtx = ctx.getApplicationContext();
+        SharedPreferences prefs = appCtx.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE);
         String token = prefs.getString("panel_token", "");
         String baseUrl = prefs.getString("api_base_url", "http://47.117.27.75");
         if (baseUrl == null || baseUrl.trim().isEmpty()) {
@@ -132,7 +157,7 @@ public class KeepAlivePollService extends Service implements Runnable {
         }
 
         if (token == null || token.trim().isEmpty()) {
-            return 5000L;
+            return 4500L;
         }
 
         HttpURLConnection conn = null;
@@ -141,15 +166,15 @@ public class KeepAlivePollService extends Service implements Runnable {
             URL url = new URL(pollUrl);
             conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("GET");
-            conn.setConnectTimeout(6000);
-            conn.setReadTimeout(6000);
+            conn.setConnectTimeout(5000);
+            conn.setReadTimeout(5000);
             conn.setUseCaches(false);
             conn.setRequestProperty("X-Panel-Token", token.trim());
             conn.setRequestProperty("Accept", "application/json");
 
             int code = conn.getResponseCode();
             if (code != 200) {
-                return 5000L;
+                return 4000L;
             }
 
             InputStream is = conn.getInputStream();
@@ -163,17 +188,18 @@ public class KeepAlivePollService extends Service implements Runnable {
 
             JSONObject data = new JSONObject(sb.toString());
             if (!data.optBoolean("ok", false)) {
-                return 5000L;
+                return 4000L;
             }
 
             boolean inClass = data.optBoolean("inClass", false) || data.optBoolean("forcePolling", false);
             int bountyCount = data.optInt("activeBountyCount", 0);
             JSONArray alerts = data.optJSONArray("alerts");
+            boolean dispatchedNewAlert = false;
 
             if (alerts != null) {
                 long nowMs = System.currentTimeMillis();
-                if (!seededOnStartup) {
-                    seededOnStartup = true;
+                if (!sSeededOnStartup) {
+                    sSeededOnStartup = true;
                     String existingSeen = prefs.getString("seen_alert_ids", "");
                     boolean hadHistory = existingSeen != null && !existingSeen.isEmpty();
                     for (int i = 0; i < alerts.length(); i++) {
@@ -183,22 +209,21 @@ public class KeepAlivePollService extends Service implements Runnable {
                         long timeMs = al.optLong("timeMs", 0L);
                         if (!id.isEmpty()) {
                             if (!hadHistory && (nowMs - timeMs > 90000L)) {
-                                MainActivity.markAlertSeenStatic(this, id);
+                                MainActivity.markAlertSeenStatic(appCtx, id);
                             }
                         }
                     }
                 }
 
-                // Dispatch chronological from oldest to newest
                 for (int i = alerts.length() - 1; i >= 0; i--) {
                     JSONObject al = alerts.optJSONObject(i);
                     if (al == null) continue;
                     String id = al.optString("id", "");
                     if (id.isEmpty()) continue;
-                    if (MainActivity.hasAlertBeenSeenStatic(this, id)) {
+                    if (MainActivity.hasAlertBeenSeenStatic(appCtx, id)) {
                         continue;
                     }
-                    MainActivity.markAlertSeenStatic(this, id);
+                    MainActivity.markAlertSeenStatic(appCtx, id);
 
                     String title = al.optString("title", "ISHIT 签到提醒");
                     String courseName = al.optString("courseName", "课程");
@@ -214,14 +239,20 @@ public class KeepAlivePollService extends Service implements Runnable {
                     payloadObj.put("classId", al.optString("classId", ""));
                     payloadObj.put("courseName", courseName);
 
-                    wakeScreenBriefly();
-                    MainActivity.postAlertNotificationStatic(this, title, body, payloadObj.toString(), id);
+                    wakeScreenBrieflyStatic(appCtx);
+                    MainActivity.postAlertNotificationStatic(appCtx, title, body, payloadObj.toString(), id);
+                    dispatchedNewAlert = true;
                 }
             }
 
-            return (inClass || bountyCount > 0) ? 3000L : 5000L;
+            if (dispatchedNewAlert || (sLastBountyCount != -1 && sLastBountyCount != bountyCount)) {
+                MainActivity.notifyWebViewPollTickStatic();
+            }
+            sLastBountyCount = bountyCount;
+
+            return (inClass || bountyCount > 0) ? 2500L : 3500L;
         } catch (Exception ignored) {
-            return 5000L;
+            return 4000L;
         } finally {
             if (conn != null) {
                 try { conn.disconnect(); } catch (Exception ignored) {}
@@ -229,9 +260,10 @@ public class KeepAlivePollService extends Service implements Runnable {
         }
     }
 
-    private void wakeScreenBriefly() {
+    public static void wakeScreenBrieflyStatic(Context ctx) {
+        if (ctx == null) return;
         try {
-            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            PowerManager pm = (PowerManager) ctx.getSystemService(Context.POWER_SERVICE);
             if (pm != null) {
                 @SuppressWarnings("deprecation")
                 PowerManager.WakeLock wl = pm.newWakeLock(
@@ -246,36 +278,15 @@ public class KeepAlivePollService extends Service implements Runnable {
 
     @Override
     public void onTaskRemoved(Intent rootIntent) {
-        scheduleSelfRestart();
+        scheduleResurrectionRelay(this, 1500L);
         super.onTaskRemoved(rootIntent);
     }
 
     @Override
     public void onDestroy() {
         running = false;
-        scheduleSelfRestart();
+        scheduleResurrectionRelay(this, 1500L);
         super.onDestroy();
-    }
-
-    private void scheduleSelfRestart() {
-        try {
-            Intent restartIntent = new Intent(getApplicationContext(), KeepAlivePollService.class);
-            int piFlags = PendingIntent.FLAG_ONE_SHOT;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                piFlags |= PendingIntent.FLAG_IMMUTABLE;
-            }
-            PendingIntent pi;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                pi = PendingIntent.getForegroundService(getApplicationContext(), 2026, restartIntent, piFlags);
-            } else {
-                pi = PendingIntent.getService(getApplicationContext(), 2026, restartIntent, piFlags);
-            }
-            AlarmManager am = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
-            if (am != null) {
-                am.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime() + 2000L, pi);
-            }
-        } catch (Exception ignored) {
-        }
     }
 
     @Override

@@ -904,7 +904,7 @@ const server = http.createServer(async (req, res) => {
         locationPresets: store.locationPresets || [],
         schedule: effectiveSchedule,
         globalSchedule: store.schedule,
-        bountyConfig: store.bountyConfig || { bountySyncSeconds: 3.5, idleSyncSeconds: 10 },
+        bountyConfig: store.bountyConfig || { bountySyncSeconds: 2, idleSyncSeconds: 3 },
         effectiveIntervalSeconds: typeof getEffectiveTimerIntervalSeconds === 'function' ? getEffectiveTimerIntervalSeconds() : Number(store.schedule?.intervalSeconds || 25),
         panelAuth: {
           enabled: pa.enabled !== false,
@@ -2215,7 +2215,7 @@ const server = http.createServer(async (req, res) => {
       if (currentSess && currentSess.role !== 'admin') {
         return sendJson(res, { ok: false, msg: '权限不足：仅管理员可管理签到悬赏与全量记录' }, 403);
       }
-      store.bountyConfig = store.bountyConfig || { bountySyncSeconds: 3.5, idleSyncSeconds: 10 };
+      store.bountyConfig = store.bountyConfig || { bountySyncSeconds: 2, idleSyncSeconds: 3 };
       store.helperLeaderboard = store.helperLeaderboard || {};
       store.bountyHistory = Array.isArray(store.bountyHistory) ? store.bountyHistory : [];
       store.signHistory = Array.isArray(store.signHistory) ? store.signHistory : [];
@@ -2237,8 +2237,8 @@ const server = http.createServer(async (req, res) => {
           polling: {
             globalIntervalSeconds: Number(store.schedule?.intervalSeconds || 25),
             effectiveIntervalSeconds: getEffectiveTimerIntervalSeconds(),
-            bountySyncSeconds: Number(store.bountyConfig?.bountySyncSeconds || 3.5),
-            idleSyncSeconds: Number(store.bountyConfig?.idleSyncSeconds || 10),
+            bountySyncSeconds: Number(store.bountyConfig?.bountySyncSeconds || 2),
+            idleSyncSeconds: Number(store.bountyConfig?.idleSyncSeconds || 3),
             userIntervals,
           },
           leaderboard: getFormattedLeaderboard(),
@@ -2288,7 +2288,7 @@ const server = http.createServer(async (req, res) => {
           store.bountyConfig.bountySyncSeconds = Math.max(1, Math.min(60, Number(body.bountySyncSeconds || 3.5)));
         }
         if (body.idleSyncSeconds !== undefined) {
-          store.bountyConfig.idleSyncSeconds = Math.max(3, Math.min(120, Number(body.idleSyncSeconds || 10)));
+          store.bountyConfig.idleSyncSeconds = Math.max(2, Math.min(120, Number(body.idleSyncSeconds || 3)));
         }
         saveStore();
         restartScheduler(true);

@@ -505,10 +505,12 @@ function switchMainModule(mod) {
     if (mod === 'global') {
       hintEl.textContent = '仪表盘';
       updateWinTopbarTitle('实时仪表盘');
+      refreshStatus(false);
     } else if (mod === 'bounty') {
       hintEl.textContent = '签到悬赏与大师榜';
       updateWinTopbarTitle('签到悬赏');
       updateNotifyPermButtonText();
+      refreshStatus(false);
     } else if (mod === 'user') {
       const curAcc = (state.status?.accounts || []).find((a) => String(a.uid) === String(state.selectedUid));
       hintEl.textContent = curAcc ? `当前配置账号：${curAcc.name} (${curAcc.uid})` : '按账号独立配置课程、课表与专属位置';
@@ -618,7 +620,7 @@ function enterAdminPanel() {
   document.getElementById('adminApp').style.display = '';
   syncAndroidNativeDaemonState();
   refreshStatus(true);
-  scheduleAdaptiveStatusPolling(3500);
+  scheduleAdaptiveStatusPolling(2500);
   updateNotifyPermButtonText();
 }
 
@@ -845,7 +847,14 @@ async function onSelectConfigUser(uid) {
   }
 }
 
+let _isRefreshingStatus = false;
+let _pendingRefreshAfter = false;
 async function refreshStatus(syncInputs = false) {
+  if (_isRefreshingStatus && !syncInputs) {
+    _pendingRefreshAfter = true;
+    return;
+  }
+  _isRefreshingStatus = true;
   try {
     const q = state.selectedUid ? `?uid=${encodeURIComponent(state.selectedUid)}` : '';
     const data = await api(`/api/status${q}`);
@@ -871,8 +880,16 @@ async function refreshStatus(syncInputs = false) {
       populateScheduleAndProfileInputs(data);
       if (data.panelAuth?.role === 'admin' && data.napcat) populateNapCatInputs(data.napcat);
     }
-  } catch (_) {}
+  } catch (_) {
+  } finally {
+    _isRefreshingStatus = false;
+    if (_pendingRefreshAfter) {
+      _pendingRefreshAfter = false;
+      setTimeout(() => refreshStatus(false), 120);
+    }
+  }
 }
+window.refreshStatus = refreshStatus;
 
 function renderTopStatus(data) {
   const badge = document.getElementById('classStatusBadge');
@@ -3440,8 +3457,8 @@ async function confirmCreateHelperLink() {
   }
 }
 
-function scheduleAdaptiveStatusPolling(intervalMs = 5000) {
-  const targetMs = Math.max(2500, Number(intervalMs || 5000));
+function scheduleAdaptiveStatusPolling(intervalMs = 2500) {
+  const targetMs = Math.max(1500, Number(intervalMs || 2500));
   if (state.statusPollTimer && state.lastPollIntervalMs === targetMs) return;
   if (state.statusPollTimer) clearInterval(state.statusPollTimer);
   state.lastPollIntervalMs = targetMs;
@@ -3453,13 +3470,18 @@ function scheduleAdaptiveStatusPolling(intervalMs = 5000) {
 }
 
 function adjustAdaptivePollingFromData(data) {
-  const activeTab = document.querySelector('#mainModuleTabs .tab-btn.active')?.getAttribute('data-main');
+  const activeTab =
+    document.querySelector('#mainModuleTabs .tab-btn.active')?.getAttribute('data-main') ||
+    document.querySelector('#androidBottomNav .android-tab-item.active')?.getAttribute('data-main') ||
+    document.querySelector('#winDesktopSidebar .win-nav-item.active')?.getAttribute('data-main');
   const hasBounties = Array.isArray(data?.bounties) && data.bounties.length > 0;
   const hasActives = Array.isArray(data?.lastDetectedActives) && data.lastDetectedActives.length > 0;
-  if (activeTab === 'bounty' || hasBounties || hasActives) {
-    scheduleAdaptiveStatusPolling(3000);
+  const fastMs = Math.max(1500, Math.min(2500, Math.round(Number(data?.bountyConfig?.bountySyncSeconds || 2) * 1000)));
+  const idleMs = Math.max(2000, Math.min(3000, Math.round(Number(data?.bountyConfig?.idleSyncSeconds || 3) * 1000)));
+  if (activeTab === 'bounty' || activeTab === 'global' || hasBounties || hasActives || data?.inClass) {
+    scheduleAdaptiveStatusPolling(fastMs);
   } else {
-    scheduleAdaptiveStatusPolling(5000);
+    scheduleAdaptiveStatusPolling(idleMs);
   }
 }
 
@@ -3996,6 +4018,7 @@ function onClickLiveSignAlertAction() {
 
 function handleAlertDirectJump(alertObj) {
   if (!alertObj) return;
+  refreshStatus(false);
   if (alertObj.eventType === 'sign_success') {
     if (document.getElementById('helperApp')?.style.display !== 'none' && state.inAppHelperReturn) {
       exitInAppHelperMode('global');
@@ -4024,6 +4047,7 @@ function handleAlertDirectJump(alertObj) {
 }
 
 window.onNativeNotificationClick = function (rawPayload) {
+  refreshStatus(false);
   try {
     const parsed = typeof rawPayload === 'string' ? JSON.parse(rawPayload) : rawPayload;
     if (parsed) handleAlertDirectJump(parsed);
@@ -4031,6 +4055,24 @@ window.onNativeNotificationClick = function (rawPayload) {
     switchMainModule('bounty');
   }
 };
+
+window.onNativeAlertPollTick = function () {
+  if (document.getElementById('adminApp')?.style.display !== 'none') {
+    refreshStatus(false);
+  }
+};
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && document.getElementById('adminApp')?.style.display !== 'none') {
+    refreshStatus(false);
+  }
+});
+
+window.addEventListener('focus', () => {
+  if (document.getElementById('adminApp')?.style.display !== 'none') {
+    refreshStatus(false);
+  }
+});
 
 function openInAppBountyAssist(token, returnModule = 'bounty') {
   if (!token) return;

@@ -663,7 +663,15 @@ function createHelperSession({
   creatorRole = 'admin',
   ttlMinutes = 45,
 }) {
-  store.helperSessions = (store.helperSessions || []).filter((s) => s.expiresAt > Date.now());
+  const nowMs = Date.now();
+  let safeEndTimeMs = Number(endTimeMs || 0);
+  if (safeEndTimeMs > 0 && safeEndTimeMs <= nowMs + 15000) {
+    safeEndTimeMs = 0;
+  }
+  if ((mode === 'sign' || mode === 'captcha') && activeId) {
+    try { fullySignedActiveIds.delete(String(activeId)); } catch (_) {}
+  }
+  store.helperSessions = (store.helperSessions || []).filter((s) => s.expiresAt > nowMs);
 
   if ((mode === 'sign' || mode === 'captcha') && activeId) {
     const existing = store.helperSessions.find(
@@ -689,7 +697,11 @@ function createHelperSession({
       if (locationRange) existing.locationRange = locationRange;
       if (needLocation !== undefined) existing.needLocation = Boolean(needLocation || existing.needLocation);
       if (needPhoto !== undefined) existing.needPhoto = Boolean(needPhoto || existing.needPhoto);
-      if (endTimeMs > 0) existing.endTimeMs = Number(endTimeMs);
+      if (safeEndTimeMs > 0) {
+        existing.endTimeMs = safeEndTimeMs;
+      } else if (existing.endTimeMs > 0 && existing.endTimeMs <= nowMs + 15000) {
+        existing.endTimeMs = 0;
+      }
       if (totalCount > 0) {
         existing.signedCount = Number(signedCount || 0);
         existing.totalCount = Number(totalCount || 0);
@@ -731,7 +743,7 @@ function createHelperSession({
     locationRange: String(locationRange || ''),
     needLocation: Boolean(needLocation || designatedPlace || signType === 'location'),
     needPhoto: Boolean(needPhoto || signType === 'photo'),
-    endTimeMs: Number(endTimeMs || 0),
+    endTimeMs: safeEndTimeMs,
     signedCount: Number(signedCount || 0),
     totalCount: Number(totalCount || 0),
     waitingThreshold: Boolean(waitingThreshold),
@@ -1859,7 +1871,14 @@ async function executeSignForActive({
       locationRange,
       needLocation: Boolean(designatedPlace || signType === 'location'),
       needPhoto,
-      endTimeMs: Number(activeInfo.endTime || activeInfo.endtime || 0),
+      endTimeMs: (() => {
+        if (activeInfo.showOverdueTipsFlag) return 0;
+        const rawEnd = Math.max(
+          Number(activeInfo.endTime || activeInfo.endtime || 0),
+          Number(activeInfo.lateEndTime || 0)
+        );
+        return rawEnd > Date.now() + 15000 ? rawEnd : 0;
+      })(),
       waitingThreshold: false,
       captchaKey: needCaptchaKey,
     });
@@ -2902,8 +2921,8 @@ async function checkExternalSignCompletions(options = {}) {
   const hasLiveBounties = (store.helperSessions || []).some(
     (s) => !s.completed && (s.mode === 'sign' || s.mode === 'captcha') && s.expiresAt > now
   );
-  const syncSec = Math.max(1, Math.min(60, Number(store.bountyConfig?.bountySyncSeconds || 3.5)));
-  const idleSec = Math.max(3, Math.min(120, Number(store.bountyConfig?.idleSyncSeconds || 10)));
+  const syncSec = Math.max(1, Math.min(60, Number(store.bountyConfig?.bountySyncSeconds || 2)));
+  const idleSec = Math.max(2, Math.min(120, Number(store.bountyConfig?.idleSyncSeconds || 3)));
   const minInterval = force ? 0 : (hasLiveBounties ? Math.round(syncSec * 1000) : Math.round(idleSec * 1000));
   if (isSyncingBounties || now - lastExternalSyncAt < minInterval) return;
   isSyncingBounties = true;
@@ -2977,15 +2996,22 @@ async function checkExternalSignCompletions(options = {}) {
           stats = await CXProtocol.getSignAttendStats(aid, meta.courseId, meta.classId, probeUid);
         } catch (_) {}
       }
+      const newestSessionAt = meta.hsList.reduce((mx, h) => Math.max(mx, Number(h.updatedAt || h.createdAt || 0)), 0);
+      const statsEndMs = Number(stats?.endTimeMs || 0);
+      const endWasAlreadyPastWhenCreated = statsEndMs > 0 && newestSessionAt > 0 && statsEndMs <= newestSessionAt + 15000;
       const isActivityEnded =
         Boolean(stats?.isOver) ||
-        (Number(stats?.endTimeMs || 0) > 0 && Date.now() > Number(stats.endTimeMs) + 4000);
+        (statsEndMs > 0 && !endWasAlreadyPastWhenCreated && Date.now() > statsEndMs + 6000);
 
       if (stats) {
         for (const hs of meta.hsList) {
           hs.signedCount = Number(stats.signedCount || hs.signedCount || 0);
           hs.totalCount = Number(stats.totalCount || hs.totalCount || 0);
-          if (stats.endTimeMs > 0) hs.endTimeMs = Number(stats.endTimeMs);
+          if (statsEndMs > 0 && !endWasAlreadyPastWhenCreated) {
+            hs.endTimeMs = statsEndMs;
+          } else if (endWasAlreadyPastWhenCreated) {
+            hs.endTimeMs = 0;
+          }
         }
       }
 
@@ -3215,7 +3241,8 @@ function getActiveBountiesForUser({ myCourseIds = new Set(), myClassIds = new Se
     if (!hs || hs.completed || hs.expired) return false;
     if (hs.mode !== 'sign' && hs.mode !== 'captcha') return false;
     if (hs.expiresAt <= now) return false;
-    if (hs.endTimeMs && hs.endTimeMs > 0 && now > hs.endTimeMs + 4000) return false;
+    const hsRefTime = Math.max(Number(hs.createdAt || 0), Number(hs.updatedAt || 0));
+    if (hs.endTimeMs && hs.endTimeMs > 0 && hs.endTimeMs > hsRefTime + 15000 && now > hs.endTimeMs + 6000) return false;
     const pend = Array.isArray(hs.pendingUids) ? hs.pendingUids : (hs.targetUids || []);
     if (pend.length === 0) return false;
     return true;

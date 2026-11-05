@@ -532,6 +532,14 @@ class CXProtocol {
         } else if (Number(detail.endTime) > 0) {
           endTimeMs = Number(detail.endTime);
         }
+        if (detail.lateEndTime && typeof detail.lateEndTime === 'object' && detail.lateEndTime.time) {
+          endTimeMs = Math.max(endTimeMs, Number(detail.lateEndTime.time) || 0);
+        } else if (Number(detail.lateEndTime) > 0) {
+          endTimeMs = Math.max(endTimeMs, Number(detail.lateEndTime));
+        }
+        if (detail.showOverdueTipsFlag && endTimeMs > 0 && endTimeMs <= Date.now()) {
+          endTimeMs = 0;
+        }
         if (Number(detail.status) === 2 || Number(detail.isOver) === 1) {
           isOver = true;
         }

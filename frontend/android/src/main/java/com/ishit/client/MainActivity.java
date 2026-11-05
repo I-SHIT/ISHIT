@@ -44,6 +44,7 @@ public class MainActivity extends Activity {
     public static final String LOCAL_ASSET_INDEX = "file:///android_asset/web/index.html";
     public static final String DEFAULT_CONFIG_JSON = "{\n  \"serverHost\": \"47.117.27.75\",\n  \"serverPort\": 80,\n  \"apiBaseUrl\": \"http://47.117.27.75\",\n  \"httpsApiBaseUrl\": \"https://appraisal-occurring-performance-phrase.trycloudflare.com\",\n  \"directIpUrl\": \"http://47.117.27.75\"\n}";
 
+    public static volatile MainActivity sActiveInstance = null;
     public WebView webView;
     public ValueCallback<Uri[]> filePathCallback;
     public String pendingNotifyPayload = null;
@@ -60,6 +61,8 @@ public class MainActivity extends Activity {
             window.getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
         }
 
+        sActiveInstance = this;
+        KeepAlivePollService.purgeLegacyGuardNotification(this);
         ensureNotificationChannelStatic(this);
         loadOrCreateExternalConfigJson();
         requestNecessaryPermissions();
@@ -113,17 +116,35 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        sActiveInstance = this;
+        KeepAlivePollService.purgeLegacyGuardNotification(this);
         startKeepAliveServiceSafe();
+        if (webView != null) {
+            webView.evaluateJavascript("if(window.refreshStatus)window.refreshStatus(false);", null);
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (sActiveInstance == this) {
+            sActiveInstance = null;
+        }
+        KeepAlivePollService.scheduleResurrectionRelay(this, 2000L);
+        super.onDestroy();
+    }
+
+    public static void notifyWebViewPollTickStatic() {
+        MainActivity act = sActiveInstance;
+        if (act == null || act.webView == null) return;
+        act.runOnUiThread(new WebViewPollTickRunnable(act));
     }
 
     public void startKeepAliveServiceSafe() {
+        KeepAlivePollService.purgeLegacyGuardNotification(this);
+        KeepAlivePollService.scheduleResurrectionRelay(this, 3000L);
         try {
             Intent svc = new Intent(this, KeepAlivePollService.class);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(svc);
-            } else {
-                startService(svc);
-            }
+            startService(svc);
         } catch (Exception ignored) {
         }
     }

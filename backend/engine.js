@@ -890,7 +890,35 @@ function claimHelperPointsByToken({ claimToken = '', helperName = '', studentId 
   const cleanComment = String(commentText || '').trim().slice(0, 300);
   const cleanImg = String(commentImage || '').trim();
 
-  const histRec = store.bountyHistory.find((h) => h && (h.claimToken === tokenKey || h.id === tokenKey));
+  let histRec = store.bountyHistory.find((h) => h && (h.claimToken === tokenKey || h.id === tokenKey));
+  if (!histRec && claim.activeId) {
+    histRec = store.bountyHistory.find((h) => h && String(h.activeId) === String(claim.activeId));
+  }
+  if (!histRec && (cleanComment || cleanImg || cleanName || cleanSid)) {
+    histRec = {
+      id: tokenKey,
+      claimToken: tokenKey,
+      timeMs: Number(claim.createdAt || Date.now()),
+      courseId: "",
+      classId: "",
+      courseName: claim.courseName || "协助课程",
+      activeId: claim.activeId || "",
+      activeName: "课堂签到",
+      signType: "normal",
+      helperName: cleanName || claim.claimedByName || cleanSid || "热心同学",
+      helperCxName: "",
+      helperStudentId: cleanSid || String(claim.claimedByStudentId || ""),
+      helperAvatar: "",
+      isLoggedInHelper: Boolean(claim.lockedIdentity),
+      signedNames: Array.isArray(claim.helpedNames) ? claim.helpedNames : [],
+      earnedPoints: Number(claim.points || 0),
+      pointsClaimed: Boolean(claim.claimed || cleanSid),
+      commentText: "",
+      commentImage: "",
+    };
+    store.bountyHistory.unshift(histRec);
+    if (store.bountyHistory.length > 100) store.bountyHistory.length = 100;
+  }
 
   // 已自动入榜（如已登录 ISHIT 主账号）或已认领过同一学号：锁定身份，仅更新留言/图片（未锁定时允许更新称号）
   if (claim.claimed) {
@@ -2873,7 +2901,9 @@ async function checkExternalSignCompletions(options = {}) {
   const hasLiveBounties = (store.helperSessions || []).some(
     (s) => !s.completed && (s.mode === 'sign' || s.mode === 'captcha') && s.expiresAt > now
   );
-  const minInterval = force ? 0 : (hasLiveBounties ? 3500 : 10000);
+  const syncSec = Math.max(1, Math.min(60, Number(store.bountyConfig?.bountySyncSeconds || 3.5)));
+  const idleSec = Math.max(3, Math.min(120, Number(store.bountyConfig?.idleSyncSeconds || 10)));
+  const minInterval = force ? 0 : (hasLiveBounties ? Math.round(syncSec * 1000) : Math.round(idleSec * 1000));
   if (isSyncingBounties || now - lastExternalSyncAt < minInterval) return;
   isSyncingBounties = true;
   lastExternalSyncAt = now;
@@ -3506,8 +3536,8 @@ function getEffectiveTimerIntervalSeconds() {
       candidates.push(Number(cfg.intervalSeconds));
     }
   }
-  const valid = candidates.filter((n) => !Number.isNaN(n) && n >= 10);
-  return valid.length > 0 ? Math.max(10, Math.min(...valid)) : 25;
+  const valid = candidates.filter((n) => !Number.isNaN(n) && n >= 5);
+  return valid.length > 0 ? Math.max(5, Math.min(...valid)) : 25;
 }
 
 function restartScheduler(triggerImmediate = true) {
@@ -3556,6 +3586,7 @@ module.exports = {
   getAccountActiveScheduleStatus,
   getGlobalScheduleSummary,
   pollCoursesOnce,
+  getEffectiveTimerIntervalSeconds,
   restartScheduler,
   getEngineState: () => {
     const summary = getGlobalScheduleSummary();

@@ -26,6 +26,8 @@ const state = {
   copiedLessonClipboard: null,
   claimCommentImageUrl: '',
   claimCommentUploading: false,
+  adminBountyData: null,
+  adminRecordTab: 'bountyHistory',
 };
 
 const SIGN_TYPE_LABELS = {
@@ -423,8 +425,15 @@ function applyPanelRolePermissionsUi(panelAuth) {
   const paneNapcat = document.getElementById('settings-pane-napcat');
   if (!isAdmin && paneNapcat) paneNapcat.style.display = 'none';
 
+  const tabBountyAdmin = document.getElementById('settingsTabBounty');
+  if (tabBountyAdmin) tabBountyAdmin.style.display = isAdmin ? '' : 'none';
+  const winTabBountyAdmin = document.getElementById('winSettingsTabBounty');
+  if (winTabBountyAdmin) winTabBountyAdmin.style.display = isAdmin ? '' : 'none';
+  const paneBountyAdmin = document.getElementById('settings-pane-bounty-admin');
+  if (!isAdmin && paneBountyAdmin) paneBountyAdmin.style.display = 'none';
+
   const activeSettingSub = document.querySelector('#settingsSubTabs .tab-btn.active')?.getAttribute('data-sub');
-  if (!isAdmin && activeSettingSub === 'napcat') {
+  if (!isAdmin && (activeSettingSub === 'napcat' || activeSettingSub === 'bounty-admin')) {
     switchSettingsSubTab('polling');
   }
 
@@ -530,7 +539,7 @@ function switchUserSubTab(sub) {
 }
 
 function switchSettingsSubTab(sub) {
-  if (sub === 'napcat' && !isCurrentPanelAdmin()) {
+  if ((sub === 'napcat' || sub === 'bounty-admin') && !isCurrentPanelAdmin()) {
     sub = 'polling';
   }
   switchMainModule('settings');
@@ -543,8 +552,17 @@ function switchSettingsSubTab(sub) {
   document.querySelectorAll('#winSubNavSettings .win-subnav-item').forEach((b) => {
     b.classList.toggle('active', b.getAttribute('data-sub') === sub);
   });
-  const settingsSubLabels = { polling: '轮询与防钓鱼', accounts: '学习通账号池', napcat: 'NapCat 推送', security: '用户与权限' };
+  const settingsSubLabels = {
+    polling: '轮询与防钓鱼',
+    accounts: '学习通账号池',
+    'bounty-admin': '签到悬赏',
+    napcat: 'NapCat 推送',
+    security: '用户与权限',
+  };
   updateWinTopbarTitle('系统设置', settingsSubLabels[sub] || '');
+  if (sub === 'bounty-admin') {
+    loadAdminBountyOverview(false);
+  }
 }
 
 function switchTab(tab) {
@@ -562,6 +580,8 @@ function switchTab(tab) {
     switchSettingsSubTab('polling');
   } else if (tab === 'accounts') {
     switchSettingsSubTab('accounts');
+  } else if (tab === 'bounty-admin') {
+    switchSettingsSubTab('bounty-admin');
   } else if (tab === 'napcat') {
     switchSettingsSubTab('napcat');
   } else if (tab === 'security') {
@@ -888,7 +908,13 @@ function renderOverview(data, syncInputs) {
       const pText = data.schedule.signThresholdEnabled
         ? ` · 人数保护 >=${Math.round(Number(data.schedule.signThresholdRatio || 0.3) * 100)}% (含临期抢签)`
         : ' · 发现即签';
-      modeSummaryEl.textContent = `当前策略：${mText}（间隔 ${data.schedule.intervalSeconds || 25}s${pText}）`;
+      const effSecDisp = data.effectiveIntervalSeconds || data.schedule.intervalSeconds || 15;
+      modeSummaryEl.textContent = `当前策略：${mText}（间隔 ${effSecDisp}s${pText}）`;
+    }
+    const adminEffTag = document.getElementById('adminBountyEffectivePollTag');
+    if (adminEffTag && data.effectiveIntervalSeconds) {
+      const bSync = data.bountyConfig?.bountySyncSeconds || 3.5;
+      adminEffTag.textContent = `当前生效 ${data.effectiveIntervalSeconds}s · 同步 ${bSync}s`;
     }
   }
   renderOverviewTestCourses(isCurrentPanelAdmin() ? (data.courses || []) : (data.myOwnedCourses || []));
@@ -1078,7 +1104,7 @@ async function quickSaveScheduleToggle(explicitChecked) {
 }
 
 async function saveGlobalIntervalConfig() {
-  const intervalSeconds = Math.max(10, Number(document.getElementById('cfgIntervalSeconds')?.value || 25));
+  const intervalSeconds = Math.max(5, Math.min(300, Number(document.getElementById('cfgIntervalSeconds')?.value || 15)));
   const inp = document.getElementById('cfgIntervalSeconds');
   if (inp) inp.value = intervalSeconds;
   const res = await api('/api/schedule', 'POST', { uid: state.selectedUid, intervalSeconds });
@@ -4946,4 +4972,505 @@ async function decodeQrImage(input, targetInputId, autoSubmit = false) {
   }
 
   showToast("未识别到清晰二维码，请尽量截取二维码区域后重试");
+}
+
+
+// ============================================================================
+// Admin 专属：系统设置 -> 签到悬赏（轮询时长 / 排行榜积分编辑重置 / 所有签到记录删改）
+// ============================================================================
+async function loadAdminBountyOverview(showToastFlag = false) {
+  if (!isCurrentPanelAdmin()) return;
+  try {
+    const res = await api('/api/admin/bounty/overview');
+    if (!res || !res.ok) {
+      if (showToastFlag) showToast(res?.msg || '加载签到悬赏设置失败');
+      return;
+    }
+    state.adminBountyData = res;
+    renderAdminBountyOverview(true);
+    if (showToastFlag) showToast('签到悬赏与记录数据已刷新');
+  } catch (e) {
+    if (showToastFlag) showToast('加载签到悬赏设置失败');
+  }
+}
+
+function renderAdminBountyOverview(syncPollingInputs = false) {
+  const data = state.adminBountyData;
+  if (!data) return;
+
+  // 1. 轮询与同步时长
+  const polling = data.polling || {};
+  const effSec = Number(polling.effectiveIntervalSeconds || polling.globalIntervalSeconds || 15);
+  const syncSec = Number(polling.bountySyncSeconds || 3.5);
+  const effTag = document.getElementById('adminBountyEffectivePollTag');
+  if (effTag) effTag.textContent = `当前生效 ${effSec}s · 同步 ${syncSec}s`;
+  if (syncPollingInputs) {
+    const pollInp = document.getElementById('adminBountyPollIntervalInput');
+    if (pollInp) pollInp.value = effSec;
+    const syncInp = document.getElementById('adminBountySyncIntervalInput');
+    if (syncInp) syncInp.value = syncSec;
+    const cfgInp = document.getElementById('cfgIntervalSeconds');
+    if (cfgInp) cfgInp.value = effSec;
+  }
+
+  // 2. 签到大师排行榜管理列表
+  const lbBox = document.getElementById('adminBountyLeaderboardList');
+  if (lbBox) {
+    const lb = Array.isArray(data.leaderboard) ? data.leaderboard : [];
+    if (lb.length === 0) {
+      lbBox.innerHTML = '<div class="empty-hint" style="padding:18px 0;">排行榜暂无数据，可点击右上角“新增上榜用户”</div>';
+    } else {
+      lbBox.innerHTML = lb
+        .map((item) => {
+          const key = String(item.key || item.studentId || item.boundUid || '');
+          const safeKey = escapeHtml(key);
+          const namesStr = Array.isArray(item.names) && item.names.length > 0 ? item.names.join(' / ') : '';
+          return `
+            <div class="list-row" style="align-items:center; gap:10px; padding:8px 0;">
+              <div style="flex:1; min-width:0;">
+                <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+                  <span class="tag">#${Number(item.rank || 1)}</span>
+                  <span style="font-weight:600;">${escapeHtml(item.displayName || item.cxName || key)}</span>
+                  ${item.cxName && item.cxName !== item.displayName ? `<span style="font-size:11px; color:var(--muted);">(${escapeHtml(item.cxName)})</span>` : ''}
+                  ${item.studentId ? `<span style="font-size:11px; color:var(--muted);">学号: ${escapeHtml(item.studentId)}</span>` : ''}
+                </div>
+                <div style="font-size:11px; color:var(--muted); margin-top:2px;">
+                  积分：<strong style="color:var(--primary);">${Number(item.score || 0)}</strong> 分 · 累计帮签：${Number(item.assistCount || 0)} 次
+                  ${namesStr ? ` · 曾用名：${escapeHtml(namesStr)}` : ''}
+                </div>
+              </div>
+              <div class="row" style="gap:6px; flex-shrink:0;">
+                <button type="button" class="btn btn-ghost btn-sm" data-lb-key="${safeKey}" onclick="openAdminLeaderboardEditModal(this.getAttribute('data-lb-key'))">编辑</button>
+                <button type="button" class="btn btn-ghost btn-sm" style="color:var(--danger);" data-lb-key="${safeKey}" onclick="deleteAdminLeaderboardEntry(this.getAttribute('data-lb-key'))">删除</button>
+              </div>
+            </div>
+          `;
+        })
+        .join('');
+    }
+  }
+
+  // 3. 签到记录管理列表（根据当前选中的 tab）
+  renderAdminBountyRecordsList();
+}
+
+function switchAdminBountyRecordTab(rtype) {
+  state.adminRecordTab = rtype || 'bountyHistory';
+  document.querySelectorAll('#adminRecordTypeTabs .tab-btn').forEach((btn) => {
+    btn.classList.toggle('active', btn.getAttribute('data-rtype') === state.adminRecordTab);
+  });
+  renderAdminBountyRecordsList();
+}
+
+function renderAdminBountyRecordsList() {
+  const box = document.getElementById('adminBountyRecordsContainer');
+  if (!box) return;
+  const data = state.adminBountyData || {};
+  const rtype = state.adminRecordTab || 'bountyHistory';
+
+  if (rtype === 'bountyHistory') {
+    const list = Array.isArray(data.bountyHistory) ? data.bountyHistory : [];
+    if (list.length === 0) {
+      box.innerHTML = '<div class="empty-hint" style="padding:24px 0;">暂无悬赏完成记录</div>';
+      return;
+    }
+    box.innerHTML = list
+      .map((h) => {
+        const recId = String(h.id || h.claimToken || '');
+        const safeId = escapeHtml(recId);
+        const timeStr = h.timeMs ? new Date(Number(h.timeMs)).toLocaleString('zh-CN', { hour12: false }) : '';
+        const signedNames = Array.isArray(h.signedNames) ? h.signedNames.join('、') : '';
+        const imgUrl = h.commentImage ? resolveAssetUrl(h.commentImage) : '';
+        return `
+          <div class="list-row" style="flex-direction:column; align-items:stretch; gap:6px; padding:10px 0;">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
+              <div style="min-width:0; flex:1;">
+                <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+                  <span style="font-weight:600;">${escapeHtml(h.courseName || '协助课程')}</span>
+                  <span class="tag">${escapeHtml(h.activeName || '课堂签到')}</span>
+                  <span class="tag" style="color:var(--ok);">+${Number(h.earnedPoints || 0)} 分</span>
+                  <span style="font-size:11px; color:var(--muted);">${escapeHtml(timeStr)}</span>
+                </div>
+                <div style="font-size:12px; color:var(--muted); margin-top:3px;">
+                  协助者：<strong>${escapeHtml(h.helperName || '热心同学')}</strong>
+                  ${h.helperStudentId ? `(${escapeHtml(h.helperStudentId)})` : ''}
+                  · 被帮同学：${escapeHtml(signedNames || '无')}
+                </div>
+                ${
+                  h.commentText || imgUrl
+                    ? `<div style="margin-top:5px; padding:6px 8px; background:var(--panel-sub, rgba(127,127,127,0.08)); border-radius:6px; font-size:12px;">
+                        ${h.commentText ? `<div>留言：${escapeHtml(h.commentText)}</div>` : ''}
+                        ${imgUrl ? `<div style="margin-top:4px;"><img src="${escapeHtml(imgUrl)}" style="max-height:72px; border-radius:4px; cursor:pointer;" onclick="openImagePreviewModal(this.src)" /></div>` : ''}
+                       </div>`
+                    : '<div style="font-size:11px; color:var(--muted); margin-top:2px;">无留言</div>'
+                }
+              </div>
+              <div class="row" style="gap:6px; flex-shrink:0;">
+                <button type="button" class="btn btn-ghost btn-sm" data-rec-id="${safeId}" onclick="openAdminRecordEditModal('bountyHistory', this.getAttribute('data-rec-id'))">编辑</button>
+                <button type="button" class="btn btn-ghost btn-sm" style="color:var(--danger);" data-rec-id="${safeId}" onclick="deleteAdminRecordItem('bountyHistory', this.getAttribute('data-rec-id'))">删除</button>
+              </div>
+            </div>
+          </div>
+        `;
+      })
+      .join('');
+    return;
+  }
+
+  if (rtype === 'signHistory') {
+    const list = Array.isArray(data.signHistory) ? data.signHistory : [];
+    if (list.length === 0) {
+      box.innerHTML = '<div class="empty-hint" style="padding:24px 0;">暂无系统签到记录</div>';
+      return;
+    }
+    box.innerHTML = list
+      .map((h, idx) => {
+        const recId = String(h.id || '');
+        const safeId = escapeHtml(recId);
+        const results = Array.isArray(h.results) ? h.results : [];
+        const okCount = results.filter((r) => r && r.ok).length;
+        const summary = results.map((r) => `${r.name || r.uid}:${r.ok ? '成功' : '失败'}`).join('，');
+        return `
+          <div class="list-row" style="align-items:flex-start; justify-content:space-between; gap:8px; padding:10px 0;">
+            <div style="min-width:0; flex:1;">
+              <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+                <span style="font-weight:600;">${escapeHtml(h.courseName || '未知课程')}</span>
+                <span class="tag">${escapeHtml(h.signTypeLabel || h.activeName || '签到')}</span>
+                <span class="tag">${okCount}/${results.length} 成功</span>
+                <span style="font-size:11px; color:var(--muted);">${escapeHtml(h.time || '')} · ${escapeHtml(h.triggerSource || '')}</span>
+              </div>
+              <div style="font-size:11px; color:var(--muted); margin-top:3px; word-break:break-all;">
+                ${escapeHtml(summary || '无明细')}
+              </div>
+            </div>
+            <div class="row" style="gap:6px; flex-shrink:0;">
+              ${recId ? `<button type="button" class="btn btn-ghost btn-sm" data-rec-id="${safeId}" onclick="openAdminRecordEditModal('signHistory', this.getAttribute('data-rec-id'))">编辑</button>` : ''}
+              <button type="button" class="btn btn-ghost btn-sm" style="color:var(--danger);" data-rec-id="${safeId}" data-rec-idx="${idx}" onclick="deleteAdminRecordItem('signHistory', this.getAttribute('data-rec-id'), Number(this.getAttribute('data-rec-idx')))">删除</button>
+            </div>
+          </div>
+        `;
+      })
+      .join('');
+    return;
+  }
+
+  if (rtype === 'helperSessions') {
+    const list = Array.isArray(data.helperSessions) ? data.helperSessions : [];
+    if (list.length === 0) {
+      box.innerHTML = '<div class="empty-hint" style="padding:24px 0;">暂无协助任务会话</div>';
+      return;
+    }
+    box.innerHTML = list
+      .map((s) => {
+        const tk = String(s.token || '');
+        const safeTk = escapeHtml(tk);
+        const timeStr = s.createdAt ? new Date(Number(s.createdAt)).toLocaleString('zh-CN', { hour12: false }) : '';
+        const targetNames = Array.isArray(s.targetNames) ? s.targetNames.join('、') : '';
+        return `
+          <div class="list-row" style="align-items:center; justify-content:space-between; gap:8px; padding:10px 0;">
+            <div style="min-width:0; flex:1;">
+              <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+                <span style="font-weight:600;">${escapeHtml(s.courseName || s.title || '协助任务')}</span>
+                <span class="tag">${escapeHtml(s.activeName || s.signType || '签到')}</span>
+                <span class="tag" style="color:${s.completed ? 'var(--ok)' : 'var(--warn)'};">${s.completed ? '已完成' : '待协助/进行中'}</span>
+                <span style="font-size:11px; color:var(--muted);">${escapeHtml(timeStr)}</span>
+              </div>
+              <div style="font-size:11px; color:var(--muted); margin-top:3px;">
+                目标同学：${escapeHtml(targetNames || '无')} · Token: ${escapeHtml(tk.slice(0, 10))}...
+              </div>
+            </div>
+            <div class="row" style="gap:6px; flex-shrink:0;">
+              <button type="button" class="btn btn-ghost btn-sm" data-tk="${safeTk}" data-done="${s.completed ? '1' : '0'}" onclick="toggleAdminHelperSession(this.getAttribute('data-tk'), this.getAttribute('data-done') !== '1')">
+                ${s.completed ? '设为未完成' : '标记完成'}
+              </button>
+              <button type="button" class="btn btn-ghost btn-sm" style="color:var(--danger);" data-tk="${safeTk}" onclick="deleteAdminRecordItem('helperSessions', this.getAttribute('data-tk'))">删除</button>
+            </div>
+          </div>
+        `;
+      })
+      .join('');
+  }
+}
+
+async function saveAdminBountyPollingConfig() {
+  const intervalSeconds = Math.max(5, Math.min(300, Number(document.getElementById('adminBountyPollIntervalInput')?.value || 15)));
+  const bountySyncSeconds = Math.max(1, Math.min(60, Number(document.getElementById('adminBountySyncIntervalInput')?.value || 3.5)));
+  const syncAllUsers = Boolean(document.getElementById('adminBountySyncAllUsersToggle')?.checked);
+
+  const res = await api('/api/admin/bounty/config', 'POST', {
+    intervalSeconds,
+    bountySyncSeconds,
+    syncAllUsers,
+  });
+  if (res && res.ok) {
+    state.adminBountyData = res;
+    renderAdminBountyOverview(true);
+    showToast(`悬赏检测轮询已设为 ${intervalSeconds}s（看板同步 ${bountySyncSeconds}s）`);
+    refreshStatus(false);
+  } else {
+    showToast(res?.msg || '保存配置失败');
+  }
+}
+
+function openAdminLeaderboardEditModal(keyOrNull) {
+  const lb = Array.isArray(state.adminBountyData?.leaderboard) ? state.adminBountyData.leaderboard : [];
+  const item = keyOrNull ? lb.find((e) => String(e.key || e.studentId || '') === String(keyOrNull)) : null;
+
+  const titleEl = document.getElementById('adminLbModalTitle');
+  if (titleEl) titleEl.textContent = item ? '编辑排行榜用户' : '新增排行榜用户';
+  document.getElementById('adminLbOrigKey').value = item ? String(item.key || item.studentId || '') : '';
+  document.getElementById('adminLbStudentId').value = item ? String(item.studentId || item.key || '') : '';
+  document.getElementById('adminLbDisplayName').value = item ? String(item.displayName || '') : '';
+  document.getElementById('adminLbCxName').value = item ? String(item.cxName || '') : '';
+  document.getElementById('adminLbScore').value = item ? Number(item.score || 0) : 1;
+  document.getElementById('adminLbAssistCount').value = item ? Number(item.assistCount || 1) : 1;
+  document.getElementById('adminLbNames').value = item && Array.isArray(item.names) ? item.names.join(', ') : '';
+  openModal('adminLeaderboardEditModal');
+}
+
+async function submitAdminLeaderboardEdit() {
+  const origKey = document.getElementById('adminLbOrigKey')?.value.trim() || '';
+  const studentId = document.getElementById('adminLbStudentId')?.value.trim() || '';
+  const displayName = document.getElementById('adminLbDisplayName')?.value.trim() || '';
+  const cxName = document.getElementById('adminLbCxName')?.value.trim() || '';
+  const score = Math.max(0, Number(document.getElementById('adminLbScore')?.value || 0));
+  const assistCount = Math.max(0, Math.floor(Number(document.getElementById('adminLbAssistCount')?.value || 0)));
+  const namesRaw = document.getElementById('adminLbNames')?.value || '';
+  const names = namesRaw
+    .split(/[,，/、]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  if (!studentId && !displayName && !origKey) {
+    return showToast('请填写学号或显示称号');
+  }
+
+  const res = await api('/api/admin/bounty/leaderboard', 'POST', {
+    action: 'upsert',
+    origKey,
+    studentId,
+    displayName,
+    cxName,
+    score,
+    assistCount,
+    names,
+  });
+  if (res && res.ok) {
+    state.adminBountyData = res;
+    renderAdminBountyOverview(false);
+    closeModal('adminLeaderboardEditModal');
+    showToast('排行榜用户信息已保存');
+    refreshStatus(false);
+  } else {
+    showToast(res?.msg || '保存失败');
+  }
+}
+
+async function deleteAdminLeaderboardEntry(key) {
+  if (!key) return;
+  if (!confirm(`确定要从排行榜中删除 "${key}" 吗？`)) return;
+  const res = await api('/api/admin/bounty/leaderboard', 'POST', {
+    action: 'delete',
+    key,
+  });
+  if (res && res.ok) {
+    state.adminBountyData = res;
+    renderAdminBountyOverview(false);
+    showToast('已删除该排行榜用户');
+    refreshStatus(false);
+  } else {
+    showToast(res?.msg || '删除失败');
+  }
+}
+
+async function resetAdminLeaderboard() {
+  if (!confirm('确定要清空并重置整个【签到大师排行榜】的所有分数数据吗？此操作不可撤销！')) return;
+  const res = await api('/api/admin/bounty/leaderboard', 'POST', { action: 'reset' });
+  if (res && res.ok) {
+    state.adminBountyData = res;
+    renderAdminBountyOverview(false);
+    showToast('签到大师排行榜已重置');
+    refreshStatus(false);
+  } else {
+    showToast(res?.msg || '重置失败');
+  }
+}
+
+function openAdminRecordEditModal(rtype, id) {
+  const data = state.adminBountyData || {};
+  document.getElementById('adminRecEditType').value = rtype;
+  document.getElementById('adminRecEditId').value = id;
+
+  const bountyFields = document.getElementById('adminRecBountyFields');
+  const signFields = document.getElementById('adminRecSignHistoryFields');
+
+  if (rtype === 'bountyHistory') {
+    const rec = (data.bountyHistory || []).find((h) => String(h.id || h.claimToken || '') === String(id));
+    if (!rec) return showToast('未找到该条悬赏完成记录');
+    document.getElementById('adminRecModalTitle').textContent = '编辑悬赏完成记录';
+    if (bountyFields) bountyFields.style.display = 'block';
+    if (signFields) signFields.style.display = 'none';
+
+    document.getElementById('adminRecCourseName').value = rec.courseName || '';
+    document.getElementById('adminRecActiveName').value = rec.activeName || '';
+    document.getElementById('adminRecHelperName').value = rec.helperName || '';
+    document.getElementById('adminRecHelperSid').value = rec.helperStudentId || '';
+    document.getElementById('adminRecEarnedPoints').value = Number(rec.earnedPoints || 0);
+    document.getElementById('adminRecSignedNames').value = Array.isArray(rec.signedNames) ? rec.signedNames.join(', ') : '';
+    document.getElementById('adminRecCommentText').value = rec.commentText || '';
+    document.getElementById('adminRecCommentImage').value = rec.commentImage || '';
+    openModal('adminRecordEditModal');
+    return;
+  }
+
+  if (rtype === 'signHistory') {
+    const rec = (data.signHistory || []).find((h) => String(h.id || '') === String(id));
+    if (!rec) return showToast('未找到该条系统签到记录');
+    document.getElementById('adminRecModalTitle').textContent = '编辑系统签到记录';
+    if (bountyFields) bountyFields.style.display = 'none';
+    if (signFields) signFields.style.display = 'block';
+
+    document.getElementById('adminRecCourseName').value = rec.courseName || '';
+    document.getElementById('adminRecActiveName').value = rec.activeName || '';
+    document.getElementById('adminRecSignTypeLabel').value = rec.signTypeLabel || '';
+    document.getElementById('adminRecTriggerSource').value = rec.triggerSource || '';
+    const lines = (rec.results || []).map((r) => `${r.name || r.uid}|${r.ok ? 'ok' : 'fail'}|${r.msg || ''}`);
+    document.getElementById('adminRecResultsText').value = lines.join('\n');
+    openModal('adminRecordEditModal');
+  }
+}
+
+async function onAdminSelectRecordImage(input) {
+  const file = input?.files?.[0];
+  if (!file) return;
+  try {
+    showToast('正在压缩并上传图片...');
+    const imgEl = await loadFileAsImageElement(file);
+    const srcW = imgEl.naturalWidth || imgEl.width || 800;
+    const srcH = imgEl.naturalHeight || imgEl.height || 600;
+    const maxSide = 1280;
+    const scale = Math.max(srcW, srcH) > maxSide ? maxSide / Math.max(srcW, srcH) : 1;
+    const dstW = Math.max(32, Math.round(srcW * scale));
+    const dstH = Math.max(32, Math.round(srcH * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = dstW;
+    canvas.height = dstH;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, dstW, dstH);
+    ctx.drawImage(imgEl, 0, 0, dstW, dstH);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.86);
+    const res = await api('/api/helper/uploadImage', 'POST', { base64Image: dataUrl });
+    if (res && res.ok && res.imageUrl) {
+      const inp = document.getElementById('adminRecCommentImage');
+      if (inp) inp.value = res.imageUrl;
+      showToast('留言图片已上传');
+    } else {
+      showToast(res?.msg || '上传图片失败');
+    }
+  } catch (e) {
+    showToast('上传图片失败');
+  } finally {
+    input.value = '';
+  }
+}
+
+async function submitAdminRecordEdit() {
+  const recordType = document.getElementById('adminRecEditType')?.value || 'bountyHistory';
+  const id = document.getElementById('adminRecEditId')?.value || '';
+  const courseName = document.getElementById('adminRecCourseName')?.value.trim() || '';
+  const activeName = document.getElementById('adminRecActiveName')?.value.trim() || '';
+
+  const payload = {
+    recordType,
+    action: 'update',
+    id,
+    courseName,
+    activeName,
+  };
+
+  if (recordType === 'bountyHistory') {
+    payload.helperName = document.getElementById('adminRecHelperName')?.value.trim() || '';
+    payload.helperStudentId = document.getElementById('adminRecHelperSid')?.value.trim() || '';
+    payload.earnedPoints = Math.max(0, Number(document.getElementById('adminRecEarnedPoints')?.value || 0));
+    payload.signedNames = document.getElementById('adminRecSignedNames')?.value || '';
+    payload.commentText = document.getElementById('adminRecCommentText')?.value || '';
+    payload.commentImage = document.getElementById('adminRecCommentImage')?.value.trim() || '';
+  } else if (recordType === 'signHistory') {
+    payload.signTypeLabel = document.getElementById('adminRecSignTypeLabel')?.value.trim() || '';
+    payload.triggerSource = document.getElementById('adminRecTriggerSource')?.value.trim() || '';
+    const rawLines = (document.getElementById('adminRecResultsText')?.value || '')
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+    payload.results = rawLines.map((line) => {
+      const parts = line.split('|');
+      const name = (parts[0] || '').trim();
+      const status = (parts[1] || 'ok').trim().toLowerCase();
+      const msg = parts.slice(2).join('|').trim() || (status === 'ok' ? '签到成功' : '签到失败');
+      return { uid: '', name, ok: status === 'ok' || status === 'true' || status === '1', already: false, msg };
+    });
+  }
+
+  const res = await api('/api/admin/bounty/records', 'POST', payload);
+  if (res && res.ok) {
+    state.adminBountyData = res;
+    renderAdminBountyOverview(false);
+    closeModal('adminRecordEditModal');
+    showToast('签到记录已更新');
+    refreshStatus(false);
+  } else {
+    showToast(res?.msg || '更新记录失败');
+  }
+}
+
+async function deleteAdminRecordItem(recordType, id, index = -1) {
+  if (!confirm('确定要删除这条记录吗？')) return;
+  const payload = { recordType, action: 'delete', id, token: id, index };
+  const res = await api('/api/admin/bounty/records', 'POST', payload);
+  if (res && res.ok) {
+    state.adminBountyData = res;
+    renderAdminBountyOverview(false);
+    showToast('已删除该条记录');
+    refreshStatus(false);
+  } else {
+    showToast(res?.msg || '删除失败');
+  }
+}
+
+async function toggleAdminHelperSession(token, completed) {
+  const res = await api('/api/admin/bounty/records', 'POST', {
+    recordType: 'helperSessions',
+    action: 'toggleComplete',
+    token,
+    completed: Boolean(completed),
+  });
+  if (res && res.ok) {
+    state.adminBountyData = res;
+    renderAdminBountyOverview(false);
+    showToast(completed ? '已标记为完成（从悬赏榜移除）' : '已重新设为未完成');
+    refreshStatus(false);
+  } else {
+    showToast(res?.msg || '操作失败');
+  }
+}
+
+async function clearCurrentAdminRecords() {
+  const rtype = state.adminRecordTab || 'bountyHistory';
+  const labelMap = {
+    bountyHistory: '悬赏完成记录',
+    signHistory: '系统签到记录',
+    helperSessions: '协助任务会话',
+  };
+  if (!confirm(`确定要清空全部【${labelMap[rtype] || rtype}】吗？此操作不可恢复！`)) return;
+  const action = rtype === 'helperSessions' ? 'clearAll' : 'clear';
+  const res = await api('/api/admin/bounty/records', 'POST', { recordType: rtype, action });
+  if (res && res.ok) {
+    state.adminBountyData = res;
+    renderAdminBountyOverview(false);
+    showToast(`已清空${labelMap[rtype] || '记录'}`);
+    refreshStatus(false);
+  } else {
+    showToast(res?.msg || '清空失败');
+  }
 }

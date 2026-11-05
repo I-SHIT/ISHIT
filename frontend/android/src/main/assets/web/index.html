@@ -207,6 +207,7 @@
         <div class="win-subnav-list" id="winSubNavSettings">
           <button type="button" class="win-subnav-item active" data-sub="polling" onclick="switchSettingsSubTab('polling')">轮询与防钓鱼</button>
           <button type="button" class="win-subnav-item" data-sub="accounts" onclick="switchSettingsSubTab('accounts')">学习通账号池</button>
+          <button type="button" class="win-subnav-item" id="winSettingsTabBounty" data-sub="bounty-admin" onclick="switchSettingsSubTab('bounty-admin')">签到悬赏</button>
           <button type="button" class="win-subnav-item" id="winSettingsTabNapcat" data-sub="napcat" onclick="switchSettingsSubTab('napcat')">NapCat 推送</button>
           <button type="button" class="win-subnav-item" data-sub="security" onclick="switchSettingsSubTab('security')">用户与权限</button>
         </div>
@@ -562,6 +563,7 @@
       <div class="tabs" id="settingsSubTabs">
         <button class="tab-btn active" data-sub="polling" onclick="switchSettingsSubTab('polling')">轮询</button>
         <button class="tab-btn" data-sub="accounts" onclick="switchSettingsSubTab('accounts')">学习通账号</button>
+        <button class="tab-btn" id="settingsTabBounty" data-sub="bounty-admin" onclick="switchSettingsSubTab('bounty-admin')">签到悬赏</button>
         <button class="tab-btn" id="settingsTabNapcat" data-sub="napcat" onclick="switchSettingsSubTab('napcat')">NapCat 推送</button>
         <button class="tab-btn" data-sub="security" onclick="switchSettingsSubTab('security')">用户管理</button>
       </div>
@@ -600,10 +602,10 @@
           <div class="list-row">
             <div>
               <div style="font-weight:500;">扫描间隔（秒）</div>
-              <div style="font-size:11px; color:var(--muted);">默认 25 秒，建议不低于 15 秒</div>
+              <div style="font-size:11px; color:var(--muted);">支持 5~300 秒（建议 10~15 秒兼顾响应速度与超星防频控）</div>
             </div>
             <div class="row" style="gap:6px;">
-              <input type="number" id="cfgIntervalSeconds" min="10" value="25" style="width:90px; padding:4px 8px;" />
+              <input type="number" id="cfgIntervalSeconds" min="5" max="300" value="15" style="width:90px; padding:4px 8px;" />
               <button type="button" class="btn btn-ghost btn-sm" onclick="saveGlobalIntervalConfig()">保存间隔</button>
             </div>
           </div>
@@ -782,6 +784,90 @@
             </div>
           </div>
           <div id="panelUsersListContainer" style="max-height:360px; overflow-y:auto;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3.5 Admin 专属：签到悬赏设置（轮询时长 / 签到记录管理 / 排行榜积分管理） -->
+    <div id="settings-pane-bounty-admin" class="sub-pane" style="display:none;">
+      <div class="grid-2" style="align-items:start;">
+        <!-- 左栏：签到悬赏轮询时长与同步策略 + 排行榜积分管理 -->
+        <div style="display:flex; flex-direction:column; gap:14px;">
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <span class="panel-title">悬赏检测与轮询时长配置</span>
+                <div style="font-size:11px; color:var(--muted); margin-top:2px;">控制老师发签到后多久出现在悬赏榜，以及外部签完后多久自动销单</div>
+              </div>
+              <span class="tag" id="adminBountyEffectivePollTag">当前生效 15s</span>
+            </div>
+
+            <div class="list-row">
+              <div style="padding-right:10px;">
+                <div style="font-weight:500;">课程签到检测轮询间隔（秒）</div>
+                <div style="font-size:11px; color:var(--muted);">决定发出签到后多久被扫描进悬赏榜（支持 5~300 秒，推荐 8~15 秒；勾选下方同步可一键覆盖所有子用户旧间隔）</div>
+              </div>
+              <input type="number" id="adminBountyPollIntervalInput" min="5" max="300" value="15" style="width:90px; padding:4px 8px;" />
+            </div>
+
+            <div class="list-row">
+              <div style="padding-right:10px;">
+                <div style="font-weight:500;">悬赏看板状态同步间隔（秒）</div>
+                <div style="font-size:11px; color:var(--muted);">有活跃悬赏时，向学习通核验最新已签名单的间隔（支持 1~60 秒，默认 3 秒）</div>
+              </div>
+              <input type="number" id="adminBountySyncIntervalInput" min="1" max="60" step="0.5" value="3.5" style="width:90px; padding:4px 8px;" />
+            </div>
+
+            <div class="list-row">
+              <div>
+                <div style="font-weight:500;">同步覆盖全部网站用户的轮询秒数</div>
+                <div style="font-size:11px; color:var(--muted);">将所有子账号的轮询间隔统一对齐为上方设定值，确保全局立即生效</div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="adminBountySyncAllUsersToggle" checked />
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <div class="row" style="margin-top:12px; gap:8px;">
+              <button type="button" class="btn" style="flex:2;" onclick="saveAdminBountyPollingConfig()">保存轮询与同步时长</button>
+              <button type="button" class="btn btn-ghost" style="flex:1;" onclick="loadAdminBountyOverview(true)">刷新数据</button>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <span class="panel-title">签到大师排行榜管理</span>
+                <div style="font-size:11px; color:var(--muted); margin-top:2px;">支持新增、修改任意用户分数/帮签次数/称号、删除或一键重置排行榜</div>
+              </div>
+              <div class="row" style="gap:6px;">
+                <button type="button" class="btn btn-sm" onclick="openAdminLeaderboardEditModal(null)">新增上榜用户</button>
+                <button type="button" class="btn btn-ghost btn-sm" style="color:var(--danger);" onclick="resetAdminLeaderboard()">重置排行榜</button>
+              </div>
+            </div>
+            <div id="adminBountyLeaderboardList" style="max-height:420px; overflow-y:auto;"></div>
+          </div>
+        </div>
+
+        <!-- 右栏：所有签到记录管理（悬赏完成记录 + 系统签到历史记录 + 活跃协助会话） -->
+        <div class="panel">
+          <div class="panel-head" style="flex-wrap:wrap; gap:8px;">
+            <div>
+              <span class="panel-title">所有签到记录管理</span>
+              <div style="font-size:11px; color:var(--muted); margin-top:2px;">支持修改、删除悬赏完成记录（含留言/图片/积分）与系统签到历史记录</div>
+            </div>
+            <div class="row" style="gap:6px;">
+              <div class="tabs" id="adminRecordTypeTabs" style="padding:2px;">
+                <button type="button" class="tab-btn active" data-rtype="bountyHistory" onclick="switchAdminBountyRecordTab('bountyHistory')">悬赏完成记录</button>
+                <button type="button" class="tab-btn" data-rtype="signHistory" onclick="switchAdminBountyRecordTab('signHistory')">系统签到记录</button>
+                <button type="button" class="tab-btn" data-rtype="helperSessions" onclick="switchAdminBountyRecordTab('helperSessions')">协助任务会话</button>
+              </div>
+              <button type="button" class="btn btn-ghost btn-sm" style="color:var(--danger);" onclick="clearCurrentAdminRecords()">清空当前列表</button>
+            </div>
+          </div>
+
+          <div id="adminBountyRecordsContainer" style="max-height:660px; overflow-y:auto;"></div>
         </div>
       </div>
     </div>
@@ -1237,7 +1323,120 @@
   </div>
 </div>
 
-<script src="app.js?v=25"></script>
+
+<!-- 弹窗 13：Admin 编辑排行榜用户分数与信息 -->
+<div id="adminLeaderboardEditModal" class="backdrop" onclick="if(event.target===this)closeModal('adminLeaderboardEditModal')">
+  <div class="dialog" style="max-width:460px;">
+    <div class="panel-head">
+      <span class="panel-title" id="adminLbModalTitle">编辑排行榜用户</span>
+      <button class="btn btn-ghost btn-sm" type="button" onclick="closeModal('adminLeaderboardEditModal')">关闭</button>
+    </div>
+    <input type="hidden" id="adminLbOrigKey" />
+    <label>学号（唯一主键 SSOT）</label>
+    <input id="adminLbStudentId" placeholder="输入学号，如 2411611118" />
+    <label style="margin-top:8px;">排行榜显示称号 / 昵称</label>
+    <input id="adminLbDisplayName" placeholder="输入显示名称" />
+    <label style="margin-top:8px;">学习通真实姓名（选填）</label>
+    <input id="adminLbCxName" placeholder="输入学习通姓名" />
+    <div class="grid-2" style="margin-top:8px; gap:10px;">
+      <div>
+        <label>当前积分 (Score)</label>
+        <input type="number" id="adminLbScore" min="0" value="1" />
+      </div>
+      <div>
+        <label>累计帮签次数</label>
+        <input type="number" id="adminLbAssistCount" min="0" value="1" />
+      </div>
+    </div>
+    <label style="margin-top:8px;">曾用称号列表（用逗号分隔）</label>
+    <input id="adminLbNames" placeholder="多个称号用逗号分隔" />
+    <div class="row" style="margin-top:16px; gap:8px;">
+      <button type="button" class="btn" style="flex:2;" onclick="submitAdminLeaderboardEdit()">保存修改</button>
+      <button type="button" class="btn btn-ghost" style="flex:1;" onclick="closeModal('adminLeaderboardEditModal')">取消</button>
+    </div>
+  </div>
+</div>
+
+<!-- 弹窗 14：Admin 编辑悬赏完成记录 / 系统签到记录 -->
+<div id="adminRecordEditModal" class="backdrop" onclick="if(event.target===this)closeModal('adminRecordEditModal')">
+  <div class="dialog" style="max-width:540px;">
+    <div class="panel-head">
+      <span class="panel-title" id="adminRecModalTitle">编辑签到记录</span>
+      <button class="btn btn-ghost btn-sm" type="button" onclick="closeModal('adminRecordEditModal')">关闭</button>
+    </div>
+    <input type="hidden" id="adminRecEditType" />
+    <input type="hidden" id="adminRecEditId" />
+
+    <div class="grid-2" style="gap:10px;">
+      <div>
+        <label>课程名称</label>
+        <input id="adminRecCourseName" placeholder="课程名称" />
+      </div>
+      <div>
+        <label>签到活动名称</label>
+        <input id="adminRecActiveName" placeholder="如：二维码签到 / 位置签到" />
+      </div>
+    </div>
+
+    <!-- 悬赏完成记录专属字段 -->
+    <div id="adminRecBountyFields">
+      <div class="grid-2" style="gap:10px; margin-top:8px;">
+        <div>
+          <label>协助者名称</label>
+          <input id="adminRecHelperName" placeholder="协助者名称" />
+        </div>
+        <div>
+          <label>协助者学号</label>
+          <input id="adminRecHelperSid" placeholder="协助者学号" />
+        </div>
+      </div>
+      <div class="grid-2" style="gap:10px; margin-top:8px;">
+        <div>
+          <label>本单加分 (earnedPoints)</label>
+          <input type="number" id="adminRecEarnedPoints" min="0" value="1" />
+        </div>
+        <div>
+          <label>已签同学名单（逗号分隔）</label>
+          <input id="adminRecSignedNames" placeholder="如：张三, 李四" />
+        </div>
+      </div>
+      <label style="margin-top:8px;">签后留言内容 (commentText)</label>
+      <textarea id="adminRecCommentText" rows="3" placeholder="可输入或修改协助留言内容..." style="width:100%; resize:vertical;"></textarea>
+      <div class="row" style="justify-content:space-between; align-items:center; margin-top:8px;">
+        <label style="margin:0;">留言图片 URL (commentImage)</label>
+        <div class="row" style="gap:6px;">
+          <input type="file" id="adminRecCommentImgFile" accept="image/*" style="display:none;" onchange="onAdminSelectRecordImage(this)" />
+          <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('adminRecCommentImgFile').click()">上传替换图片</button>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('adminRecCommentImage').value=''">清空图片</button>
+        </div>
+      </div>
+      <input id="adminRecCommentImage" placeholder="/uploads/comments/xxx.jpg（留空表示无图）" style="margin-top:4px;" />
+    </div>
+
+    <!-- 系统签到记录专属字段 -->
+    <div id="adminRecSignHistoryFields" style="display:none;">
+      <div class="grid-2" style="gap:10px; margin-top:8px;">
+        <div>
+          <label>签到类型标签</label>
+          <input id="adminRecSignTypeLabel" placeholder="如：二维码签到 / 普通签到" />
+        </div>
+        <div>
+          <label>触发来源</label>
+          <input id="adminRecTriggerSource" placeholder="如：测试课程轮询 / 悬赏协助" />
+        </div>
+      </div>
+      <label style="margin-top:8px;">账号签到结果明细（每行格式：姓名|状态(ok/fail)|提示语）</label>
+      <textarea id="adminRecResultsText" rows="5" style="width:100%; font-family:monospace; font-size:12px;" placeholder="张三|ok|签到成功"></textarea>
+    </div>
+
+    <div class="row" style="margin-top:16px; gap:8px;">
+      <button type="button" class="btn" style="flex:2;" onclick="submitAdminRecordEdit()">保存修改</button>
+      <button type="button" class="btn btn-ghost" style="flex:1;" onclick="closeModal('adminRecordEditModal')">取消</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js?v=26"></script>
 </body>
 </html>
 

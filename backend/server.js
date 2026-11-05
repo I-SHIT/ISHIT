@@ -32,6 +32,7 @@ const {
   findMatchingAccountsForClass,
   processIncomingChatImageItem,
   pollCoursesOnce,
+  getEffectiveTimerIntervalSeconds,
   restartScheduler,
   getEngineState,
 } = require('./engine.js');
@@ -363,7 +364,7 @@ const server = http.createServer(async (req, res) => {
 
   try {
     // 公开托管协助留言图片 (/uploads/comments/<filename>)，兼容纯 API 模式与静态托管模式
-    if (pathname.startsWith('/uploads/comments/') && req.method === 'GET') {
+    if ((pathname.startsWith('/uploads/comments/') || pathname.startsWith('/api/comment_images/')) && req.method === 'GET') {
       const fileName = path.basename(pathname);
       if (!/^[a-zA-Z0-9_-]+\.(jpg|jpeg|png|webp|gif)$/i.test(fileName)) {
         res.writeHead(404);
@@ -902,6 +903,8 @@ const server = http.createServer(async (req, res) => {
         locationPresets: store.locationPresets || [],
         schedule: effectiveSchedule,
         globalSchedule: store.schedule,
+        bountyConfig: store.bountyConfig || { bountySyncSeconds: 3.5, idleSyncSeconds: 10 },
+        effectiveIntervalSeconds: typeof getEffectiveTimerIntervalSeconds === 'function' ? getEffectiveTimerIntervalSeconds() : Number(store.schedule?.intervalSeconds || 25),
         panelAuth: {
           enabled: pa.enabled !== false,
           username: currentUsername,
@@ -1794,17 +1797,50 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, { ok: true, leaderboard: getFormattedLeaderboard() });
     }
 
+    if (pathname === '/api/helper/uploadImage' && req.method === 'POST') {
+      const body = await readBodyJson(req);
+      const raw = String(body.base64Image || body.image || '').trim();
+      if (!raw) {
+        return sendJson(res, { ok: false, msg: '未接收到图片数据' }, 400);
+      }
+      const match = raw.match(/^data:image\/(jpeg|jpg|png|webp|gif);base64,([A-Za-z0-9+/=\r\n]+)$/i);
+      let ext = 'jpg';
+      let b64 = raw;
+      if (match) {
+        ext = match[1].toLowerCase() === 'jpeg' ? 'jpg' : match[1].toLowerCase();
+        b64 = match[2];
+      } else {
+        b64 = raw.replace(/^data:[^;]+;base64,/i, '');
+      }
+      const buf = Buffer.from(b64, 'base64');
+      if (!buf || buf.length < 32) {
+        return sendJson(res, { ok: false, msg: '图片数据无效' }, 400);
+      }
+      if (buf.length > 8 * 1024 * 1024) {
+        return sendJson(res, { ok: false, msg: '图片不能超过 8MB' }, 400);
+      }
+      fs.mkdirSync(COMMENT_IMAGES_DIR, { recursive: true });
+      const randId = Math.random().toString(36).slice(2, 10);
+      const fileName = 'cmt_' + Date.now() + '_' + randId + '.' + ext;
+      fs.writeFileSync(path.join(COMMENT_IMAGES_DIR, fileName), buf);
+      const imageUrl = '/uploads/comments/' + fileName;
+      return sendJson(res, { ok: true, imageUrl, url: imageUrl, fileName });
+    }
+
     if (pathname === '/api/helper/claim' && req.method === 'POST') {
       const body = await readBodyJson(req);
       const resClaim = claimHelperPointsByToken({
         claimToken: body.claimToken || '',
         helperName: body.helperName || '',
         studentId: body.studentId || '',
+        commentText: body.commentText || '',
+        commentImage: body.commentImage || '',
       });
       if (!resClaim.ok) return sendJson(res, resClaim, 400);
       return sendJson(res, {
         ...resClaim,
         leaderboard: getFormattedLeaderboard(),
+        bountyHistory: getFormattedBountyHistory(),
       });
     }
 
@@ -2064,7 +2100,7 @@ const server = http.createServer(async (req, res) => {
       const patch = {};
       if (body.masterEnabled !== undefined) patch.masterEnabled = Boolean(body.masterEnabled);
       if (body.forcePolling !== undefined) patch.forcePolling = Boolean(body.forcePolling);
-      if (body.intervalSeconds !== undefined) patch.intervalSeconds = Math.max(10, Number(body.intervalSeconds || 25));
+      if (body.intervalSeconds !== undefined) patch.intervalSeconds = Math.max(5, Math.min(300, Number(body.intervalSeconds || 25)));
       if (body.signThresholdEnabled !== undefined) patch.signThresholdEnabled = Boolean(body.signThresholdEnabled);
       if (body.signThresholdRatio !== undefined) patch.signThresholdRatio = Math.max(0.01, Math.min(0.99, Number(body.signThresholdRatio || 0.3)));
 
@@ -2102,6 +2138,295 @@ const server = http.createServer(async (req, res) => {
         schedule: targetAcc ? getEffectiveScheduleForCxUid(targetUid) : store.schedule,
         engine: getEngineState(),
       });
+    }
+
+    // Admin 专属：签到悬赏系统设置（轮询时长配置、所有签到记录删改、排行榜用户分数编辑与重置）
+    if (pathname.startsWith('/api/admin/bounty/')) {
+      if (currentSess && currentSess.role !== 'admin') {
+        return sendJson(res, { ok: false, msg: '权限不足：仅管理员可管理签到悬赏与全量记录' }, 403);
+      }
+      store.bountyConfig = store.bountyConfig || { bountySyncSeconds: 3.5, idleSyncSeconds: 10 };
+      store.helperLeaderboard = store.helperLeaderboard || {};
+      store.bountyHistory = Array.isArray(store.bountyHistory) ? store.bountyHistory : [];
+      store.signHistory = Array.isArray(store.signHistory) ? store.signHistory : [];
+      store.helperSessions = Array.isArray(store.helperSessions) ? store.helperSessions : [];
+
+      const buildAdminBountySnapshot = () => {
+        const userIntervals = {};
+        for (const [uname, ucfg] of Object.entries(store.userScheduleConfigs || {})) {
+          if (ucfg && typeof ucfg === 'object') {
+            userIntervals[uname] = {
+              masterEnabled: ucfg.masterEnabled !== false,
+              forcePolling: Boolean(ucfg.forcePolling),
+              intervalSeconds: Number(ucfg.intervalSeconds || store.schedule?.intervalSeconds || 25),
+            };
+          }
+        }
+        return {
+          ok: true,
+          polling: {
+            globalIntervalSeconds: Number(store.schedule?.intervalSeconds || 25),
+            effectiveIntervalSeconds: getEffectiveTimerIntervalSeconds(),
+            bountySyncSeconds: Number(store.bountyConfig?.bountySyncSeconds || 3.5),
+            idleSyncSeconds: Number(store.bountyConfig?.idleSyncSeconds || 10),
+            userIntervals,
+          },
+          leaderboard: getFormattedLeaderboard(),
+          bountyHistory: store.bountyHistory.slice(0, 100),
+          signHistory: store.signHistory.slice(0, 100),
+          helperSessions: store.helperSessions.slice(0, 60).map((s) => ({
+            token: s.token,
+            title: s.title || s.activeName || '签到协助',
+            courseName: s.courseName || '',
+            activeName: s.activeName || '',
+            activeId: s.activeId || '',
+            signType: s.signType || 'normal',
+            targetNames: s.targetNames || [],
+            completed: Boolean(s.completed),
+            expired: Boolean(s.expired),
+            createdAt: s.createdAt || 0,
+            expiresAt: s.expiresAt || 0,
+          })),
+        };
+      };
+
+      if (pathname === '/api/admin/bounty/overview' && req.method === 'GET') {
+        return sendJson(res, buildAdminBountySnapshot());
+      }
+
+      if (pathname === '/api/admin/bounty/config' && req.method === 'POST') {
+        const body = await readBodyJson(req);
+        if (body.intervalSeconds !== undefined) {
+          const sec = Math.max(5, Math.min(300, Number(body.intervalSeconds || 25)));
+          store.schedule = { ...(store.schedule || {}), intervalSeconds: sec };
+          if (body.syncAllUsers !== false) {
+            store.userScheduleConfigs = store.userScheduleConfigs || {};
+            for (const uname of Object.keys(store.userScheduleConfigs)) {
+              if (store.userScheduleConfigs[uname] && typeof store.userScheduleConfigs[uname] === 'object') {
+                store.userScheduleConfigs[uname].intervalSeconds = sec;
+              }
+            }
+          } else if (currentSess?.username) {
+            store.userScheduleConfigs = store.userScheduleConfigs || {};
+            store.userScheduleConfigs[currentSess.username] = {
+              ...getEffectiveScheduleForPanelUser(currentSess.username),
+              intervalSeconds: sec,
+            };
+          }
+        }
+        if (body.bountySyncSeconds !== undefined) {
+          store.bountyConfig.bountySyncSeconds = Math.max(1, Math.min(60, Number(body.bountySyncSeconds || 3.5)));
+        }
+        if (body.idleSyncSeconds !== undefined) {
+          store.bountyConfig.idleSyncSeconds = Math.max(3, Math.min(120, Number(body.idleSyncSeconds || 10)));
+        }
+        saveStore();
+        restartScheduler(true);
+        sysLog('CONF', `[签到悬赏设置] 管理员更新轮询参数: 课程检测=${getEffectiveTimerIntervalSeconds()}s, 悬赏同步=${store.bountyConfig.bountySyncSeconds}s`);
+        return sendJson(res, buildAdminBountySnapshot());
+      }
+
+      if (pathname === '/api/admin/bounty/leaderboard' && req.method === 'POST') {
+        const body = await readBodyJson(req);
+        const action = String(body.action || '').trim();
+
+        if (action === 'reset') {
+          store.helperLeaderboard = {};
+          saveStore();
+          sysLog('ADMIN', '[签到大师榜] 管理员已重置排行榜全部积分数据');
+          return sendJson(res, buildAdminBountySnapshot());
+        }
+
+        if (action === 'delete') {
+          const key = String(body.key || body.studentId || '').trim();
+          if (key && store.helperLeaderboard[key]) {
+            delete store.helperLeaderboard[key];
+          } else if (key) {
+            for (const [k, v] of Object.entries(store.helperLeaderboard)) {
+              if (String(v?.studentId || '') === key || String(v?.key || '') === key) {
+                delete store.helperLeaderboard[k];
+              }
+            }
+          }
+          saveStore();
+          return sendJson(res, buildAdminBountySnapshot());
+        }
+
+        if (action === 'upsert') {
+          const origKey = String(body.origKey || '').trim();
+          const studentId = String(body.studentId || '').trim();
+          const displayName = String(body.displayName || '').trim();
+          const cxName = String(body.cxName || '').trim();
+          const school = String(body.school || '').trim();
+          const score = Math.max(0, Number(body.score || 0));
+          const assistCount = Math.max(0, Math.floor(Number(body.assistCount || 0)));
+          const newKey = studentId || origKey || displayName;
+          if (!newKey) {
+            return sendJson(res, { ok: false, msg: '学号或用户标识不能为空' }, 400);
+          }
+          const prev = (origKey && store.helperLeaderboard[origKey]) || store.helperLeaderboard[newKey] || {};
+          if (origKey && origKey !== newKey && store.helperLeaderboard[origKey]) {
+            delete store.helperLeaderboard[origKey];
+          }
+          const matchedAcc = (store.accounts || []).find(
+            (a) => a && ((studentId && String(a.studentId || '').trim() === studentId) || (prev.boundUid && String(a.uid) === String(prev.boundUid)))
+          );
+          const namesArr = Array.isArray(body.names)
+            ? body.names.map((n) => String(n).trim()).filter(Boolean)
+            : Array.isArray(prev.names)
+            ? [...prev.names]
+            : [];
+          if (displayName) {
+            const filtered = namesArr.filter((n) => n !== displayName);
+            namesArr.length = 0;
+            namesArr.push(displayName, ...filtered);
+          }
+          if (cxName && !namesArr.includes(cxName)) namesArr.push(cxName);
+
+          store.helperLeaderboard[newKey] = {
+            ...prev,
+            key: newKey,
+            studentId: studentId || prev.studentId || '',
+            boundUid: String(matchedAcc?.uid || prev.boundUid || ''),
+            cxName: cxName || matchedAcc?.name || prev.cxName || displayName || newKey,
+            preferredName: displayName || prev.preferredName || cxName || newKey,
+            names: namesArr,
+            avatar: body.avatar !== undefined ? String(body.avatar) : (matchedAcc?.avatar || prev.avatar || ''),
+            school: school || matchedAcc?.school || prev.school || '',
+            score,
+            assistCount,
+            lastAssistAt: prev.lastAssistAt || Date.now(),
+            lastCourseName: body.lastCourseName !== undefined ? String(body.lastCourseName) : (prev.lastCourseName || ''),
+          };
+          saveStore();
+          return sendJson(res, buildAdminBountySnapshot());
+        }
+
+        return sendJson(res, { ok: false, msg: '未知的排行榜操作' }, 400);
+      }
+
+      if (pathname === '/api/admin/bounty/records' && req.method === 'POST') {
+        const body = await readBodyJson(req);
+        const recordType = String(body.recordType || 'bountyHistory').trim(); // bountyHistory | signHistory | helperSessions
+        const action = String(body.action || '').trim();
+
+        if (recordType === 'bountyHistory') {
+          if (action === 'clear') {
+            store.bountyHistory = [];
+            saveStore();
+            return sendJson(res, buildAdminBountySnapshot());
+          }
+          if (action === 'delete') {
+            const targetId = String(body.id || body.claimToken || '').trim();
+            store.bountyHistory = store.bountyHistory.filter(
+              (h) => h && String(h.id || h.claimToken || '') !== targetId
+            );
+            saveStore();
+            return sendJson(res, buildAdminBountySnapshot());
+          }
+          if (action === 'update') {
+            const targetId = String(body.id || body.claimToken || '').trim();
+            const rec = store.bountyHistory.find(
+              (h) => h && (String(h.id || '') === targetId || String(h.claimToken || '') === targetId)
+            );
+            if (!rec) return sendJson(res, { ok: false, msg: '未找到该条悬赏完成记录' }, 404);
+            if (body.helperName !== undefined) rec.helperName = String(body.helperName).trim();
+            if (body.helperStudentId !== undefined) rec.helperStudentId = String(body.helperStudentId).trim();
+            if (body.courseName !== undefined) rec.courseName = String(body.courseName).trim();
+            if (body.activeName !== undefined) rec.activeName = String(body.activeName).trim();
+            if (body.earnedPoints !== undefined) rec.earnedPoints = Math.max(0, Number(body.earnedPoints || 0));
+            if (body.pointsClaimed !== undefined) rec.pointsClaimed = Boolean(body.pointsClaimed);
+            if (body.commentText !== undefined) rec.commentText = String(body.commentText).slice(0, 500);
+            if (body.commentImage !== undefined) rec.commentImage = String(body.commentImage).trim();
+            if (body.signedNames !== undefined) {
+              rec.signedNames = Array.isArray(body.signedNames)
+                ? body.signedNames.map((s) => String(s).trim()).filter(Boolean)
+                : String(body.signedNames)
+                    .split(/[,，/、\s]+/)
+                    .map((s) => s.trim())
+                    .filter(Boolean);
+            }
+            const claimKey = rec.claimToken || rec.id;
+            if (claimKey && store.helperClaims && store.helperClaims[claimKey]) {
+              if (body.commentText !== undefined) store.helperClaims[claimKey].commentText = rec.commentText;
+              if (body.commentImage !== undefined) store.helperClaims[claimKey].commentImage = rec.commentImage;
+              if (body.helperName !== undefined) store.helperClaims[claimKey].claimedByName = rec.helperName;
+            }
+            saveStore();
+            return sendJson(res, buildAdminBountySnapshot());
+          }
+        }
+
+        if (recordType === 'signHistory') {
+          if (action === 'clear') {
+            store.signHistory = [];
+            saveStore();
+            return sendJson(res, buildAdminBountySnapshot());
+          }
+          if (action === 'delete') {
+            const targetId = String(body.id || '').trim();
+            const idx = Number(body.index);
+            if (targetId) {
+              store.signHistory = store.signHistory.filter((h) => h && String(h.id || '') !== targetId);
+            } else if (Number.isInteger(idx) && idx >= 0 && idx < store.signHistory.length) {
+              store.signHistory.splice(idx, 1);
+            }
+            saveStore();
+            return sendJson(res, buildAdminBountySnapshot());
+          }
+          if (action === 'update') {
+            const targetId = String(body.id || '').trim();
+            const rec = store.signHistory.find((h) => h && String(h.id || '') === targetId);
+            if (!rec) return sendJson(res, { ok: false, msg: '未找到该条系统签到记录' }, 404);
+            if (body.courseName !== undefined) rec.courseName = String(body.courseName).trim();
+            if (body.activeName !== undefined) rec.activeName = String(body.activeName).trim();
+            if (body.signTypeLabel !== undefined) rec.signTypeLabel = String(body.signTypeLabel).trim();
+            if (body.triggerSource !== undefined) rec.triggerSource = String(body.triggerSource).trim();
+            if (body.time !== undefined) rec.time = String(body.time).trim();
+            if (Array.isArray(body.results)) {
+              rec.results = body.results.map((r) => ({
+                uid: String(r.uid || ''),
+                name: String(r.name || ''),
+                ok: Boolean(r.ok),
+                already: Boolean(r.already),
+                msg: String(r.msg || ''),
+              }));
+            }
+            saveStore();
+            return sendJson(res, buildAdminBountySnapshot());
+          }
+        }
+
+        if (recordType === 'helperSessions') {
+          if (action === 'clearCompleted') {
+            store.helperSessions = store.helperSessions.filter((s) => s && !s.completed && !s.expired);
+            saveStore();
+            return sendJson(res, buildAdminBountySnapshot());
+          }
+          if (action === 'clearAll') {
+            store.helperSessions = [];
+            saveStore();
+            return sendJson(res, buildAdminBountySnapshot());
+          }
+          if (action === 'delete') {
+            const tk = String(body.token || '').trim();
+            store.helperSessions = store.helperSessions.filter((s) => s && String(s.token || '') !== tk);
+            saveStore();
+            return sendJson(res, buildAdminBountySnapshot());
+          }
+          if (action === 'toggleComplete') {
+            const tk = String(body.token || '').trim();
+            const hs = store.helperSessions.find((s) => s && String(s.token || '') === tk);
+            if (hs) {
+              hs.completed = Boolean(body.completed);
+              saveStore();
+            }
+            return sendJson(res, buildAdminBountySnapshot());
+          }
+        }
+
+        return sendJson(res, { ok: false, msg: '不支持的记录管理操作' }, 400);
+      }
     }
 
     if (pathname === '/api/napcat' && req.method === 'POST') {

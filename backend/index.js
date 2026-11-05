@@ -162,6 +162,10 @@ const defaultStore = {
   helperLeaderboard: {},
   helperClaims: {},
   bountyHistory: [],
+  bountyConfig: {
+    bountySyncSeconds: 3.5,
+    idleSyncSeconds: 10,
+  },
   recentAlerts: [],
   pendingCaptchas: {},
   schedule: {
@@ -200,6 +204,7 @@ if (fs.existsSync(STORE_FILE)) {
       helperLeaderboard: loaded.helperLeaderboard || {},
       helperClaims: loaded.helperClaims || {},
       bountyHistory: Array.isArray(loaded.bountyHistory) ? loaded.bountyHistory.slice(0, 100) : [],
+      bountyConfig: { ...defaultStore.bountyConfig, ...(loaded.bountyConfig || {}) },
       recentAlerts: Array.isArray(loaded.recentAlerts) ? loaded.recentAlerts.slice(0, 80) : [],
       locationPresets: Array.isArray(loaded.locationPresets) && loaded.locationPresets.length > 0
         ? loaded.locationPresets

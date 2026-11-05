@@ -1124,6 +1124,38 @@ async function performSingleAccountSign({
     longitude !== null && longitude !== undefined && longitude !== '';
   const hasTeacherCoord = (teacherBdLat !== null && teacherBdLng !== null) || (teacherGdLat !== null && teacherGdLng !== null);
 
+  const randomOffsetEnabled =
+    courseSetting?.randomOffsetEnabled !== undefined
+      ? Boolean(courseSetting.randomOffsetEnabled)
+      : effProfile?.locationRandomOffsetEnabled !== false;
+  const rawOffsetM =
+    courseSetting?.randomOffsetMeters !== undefined
+      ? Number(courseSetting.randomOffsetMeters)
+      : Number(effProfile?.locationRandomOffsetMeters ?? 15);
+  const randomOffsetMeters = Number.isFinite(rawOffsetM) && rawOffsetM >= 0 ? Math.min(500, rawOffsetM) : 15;
+
+  const applyMeterJitter = (lat, lng, maxMeters) => {
+    if (!Number.isFinite(maxMeters) || maxMeters <= 0) return { lat, lng };
+    const r = maxMeters * Math.sqrt(Math.random());
+    const theta = Math.random() * 2 * Math.PI;
+    const dNorthM = r * Math.cos(theta);
+    const dEastM = r * Math.sin(theta);
+    const metersPerDegLat = 111320;
+    const metersPerDegLng = 111320 * Math.max(0.2, Math.cos((lat * Math.PI) / 180));
+    return {
+      lat: lat + dNorthM / metersPerDegLat,
+      lng: lng + dEastM / metersPerDegLng,
+    };
+  };
+
+  let targetBdLat = teacherBdLat;
+  let targetBdLng = teacherBdLng;
+  if ((targetBdLat === null || targetBdLng === null) && teacherGdLat !== null && teacherGdLng !== null) {
+    const bdFromGd = CXProtocol.gcj02ToBd09(teacherGdLat, teacherGdLng);
+    targetBdLat = bdFromGd.lat;
+    targetBdLng = bdFromGd.lng;
+  }
+
   let resolvedAddress = address || designatedPlace || courseSetting?.location?.address || userDefLoc.address || '教学楼';
   let resolvedLat = null;
   let resolvedLng = null;
@@ -1134,16 +1166,8 @@ async function performSingleAccountSign({
     resolvedLng = Number(longitude);
     coordSystem = 'wgs84';
     resolvedAddress = address || designatedPlace || courseSetting?.location?.address || userDefLoc.address || '教学楼';
-  } else if (hasTeacherCoord) {
-    // 教师活动明确下发了目标靶心坐标：计算课程预设坐标是否在允许半径内，若超出则强制锁死教师靶心坐标（<4米微扰防雷同）
-    let targetBdLat = teacherBdLat;
-    let targetBdLng = teacherBdLng;
-    if ((targetBdLat === null || targetBdLng === null) && teacherGdLat !== null && teacherGdLng !== null) {
-      const bdFromGd = CXProtocol.gcj02ToBd09(teacherGdLat, teacherGdLng);
-      targetBdLat = bdFromGd.lat;
-      targetBdLng = bdFromGd.lng;
-    }
-
+  } else if (hasTeacherCoord && targetBdLat !== null && targetBdLng !== null) {
+    // 教师活动明确下发了目标靶心坐标：计算课程预设坐标是否在允许半径内，若超出则锁死教师靶心坐标
     let useCoursePreset = false;
     if (courseSetting?.location?.latitude && courseSetting?.location?.longitude) {
       const presetBd = CXProtocol.wgs84ToBd09(Number(courseSetting.location.latitude), Number(courseSetting.location.longitude));
@@ -1159,8 +1183,8 @@ async function performSingleAccountSign({
       coordSystem = 'wgs84';
       resolvedAddress = address || courseSetting?.location?.address || designatedPlace || userDefLoc.address || '教学楼';
     } else {
-      resolvedLat = targetBdLat + (Math.random() - 0.5) * 0.00003;
-      resolvedLng = targetBdLng + (Math.random() - 0.5) * 0.00003;
+      resolvedLat = targetBdLat;
+      resolvedLng = targetBdLng;
       coordSystem = 'bd09';
       resolvedAddress = address || designatedPlace || courseSetting?.location?.address || userDefLoc.address || '教学楼';
     }
@@ -1173,6 +1197,32 @@ async function performSingleAccountSign({
     resolvedLat = Number(userDefLoc.latitude ?? 30.8328);
     resolvedLng = Number(userDefLoc.longitude ?? 121.5035);
     coordSystem = 'wgs84';
+  }
+
+  // 无论使用预设位置、默认位置、浏览器自动定位还是教师靶心自动定位，统一按账号独立施加随机米数偏差防雷同
+  if (randomOffsetEnabled && randomOffsetMeters > 0 && Number.isFinite(resolvedLat) && Number.isFinite(resolvedLng)) {
+    const jittered = applyMeterJitter(resolvedLat, resolvedLng, randomOffsetMeters);
+    if (hasTeacherCoord && targetBdLat !== null && targetBdLng !== null && teacherRangeM > 0) {
+      const safeFenceM = Math.max(3, teacherRangeM - 4);
+      const baseBd = coordSystem === 'bd09' ? { lat: resolvedLat, lng: resolvedLng } : CXProtocol.wgs84ToBd09(resolvedLat, resolvedLng);
+      const baseDistM = calcBdDistanceM(baseBd.lat, baseBd.lng, targetBdLat, targetBdLng);
+      const candBd = coordSystem === 'bd09' ? jittered : CXProtocol.wgs84ToBd09(jittered.lat, jittered.lng);
+      const candDistM = calcBdDistanceM(candBd.lat, candBd.lng, targetBdLat, targetBdLng);
+
+      if (baseDistM <= safeFenceM && candDistM > safeFenceM) {
+        // 若基准点本在教师允许围栏内而随机偏差越界，则沿教师靶心安全半径内重采样，绝不因随机偏差导致超出范围
+        const clampedCenterJitter = applyMeterJitter(targetBdLat, targetBdLng, Math.min(randomOffsetMeters, safeFenceM));
+        resolvedLat = clampedCenterJitter.lat;
+        resolvedLng = clampedCenterJitter.lng;
+        coordSystem = 'bd09';
+      } else {
+        resolvedLat = jittered.lat;
+        resolvedLng = jittered.lng;
+      }
+    } else {
+      resolvedLat = jittered.lat;
+      resolvedLng = jittered.lng;
+    }
   }
 
   let faceParams = {};

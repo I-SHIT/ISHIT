@@ -1230,7 +1230,10 @@ function renderCoursesList(courses) {
         const isTest = Boolean(c.settings?.isTestCourse);
         const testEnabled = c.settings?.testPollingEnabled !== false;
         const regEnabled = isContinuous ? true : c.settings?.pollingEnabled !== false;
-        const locText = c.settings?.location?.address ? `预设位置: ${c.settings.location.address}` : '使用默认位置';
+        const randOn = c.settings?.randomOffsetEnabled !== false;
+        const randM = Number.isFinite(Number(c.settings?.randomOffsetMeters)) ? Number(c.settings.randomOffsetMeters) : 15;
+        const randSuffix = randOn && randM > 0 ? ` (±${randM}m随机)` : '';
+        const locText = (c.settings?.location?.address ? `预设位置: ${c.settings.location.address}` : '使用默认位置') + randSuffix;
 
         const switchControl = isTest
           ? `<span style="font-size:12px; font-weight:500;">测试轮询</span>
@@ -1335,6 +1338,20 @@ function openCourseSettingModal(course) {
   document.getElementById('csAddress').value = loc.address || '';
   document.getElementById('csLat').value = loc.latitude ?? '';
   document.getElementById('csLng').value = loc.longitude ?? '';
+  const eff = state.status?.effectiveProfile || {};
+  const defaultOffsetOn = eff.locationRandomOffsetEnabled !== false;
+  const defaultOffsetM = Number.isFinite(Number(eff.locationRandomOffsetMeters)) ? Number(eff.locationRandomOffsetMeters) : 15;
+  const csEnabledEl = document.getElementById('csRandomOffsetEnabled');
+  const csMetersEl = document.getElementById('csRandomOffsetMeters');
+  if (csEnabledEl) {
+    csEnabledEl.checked = course.settings?.randomOffsetEnabled !== undefined ? Boolean(course.settings.randomOffsetEnabled) : defaultOffsetOn;
+  }
+  if (csMetersEl) {
+    csMetersEl.value =
+      course.settings?.randomOffsetMeters !== undefined && Number.isFinite(Number(course.settings.randomOffsetMeters))
+        ? Number(course.settings.randomOffsetMeters)
+        : defaultOffsetM;
+  }
   renderCsPhotoList(course.settings?.imageObjectIds || []);
   openModal('courseSettingModal');
 }
@@ -1382,11 +1399,18 @@ async function saveCourseSettingModal() {
   const lat = document.getElementById('csLat').value.trim();
   const lng = document.getElementById('csLng').value.trim();
   const location = address || lat || lng ? { address, latitude: Number(lat || 30.8328), longitude: Number(lng || 121.5035) } : null;
+  const csEnabledEl = document.getElementById('csRandomOffsetEnabled');
+  const csMetersEl = document.getElementById('csRandomOffsetMeters');
+  const randomOffsetEnabled = csEnabledEl ? Boolean(csEnabledEl.checked) : true;
+  const rawMeters = csMetersEl ? Number(csMetersEl.value) : 15;
+  const randomOffsetMeters = Number.isFinite(rawMeters) && rawMeters >= 0 ? Math.min(500, rawMeters) : 15;
 
   await api('/api/courses/settings', 'POST', {
     uid: state.selectedUid,
     courseId: c.courseId,
     location,
+    randomOffsetEnabled,
+    randomOffsetMeters,
     imageObjectIds: c.settings?.imageObjectIds || [],
   });
   closeModal('courseSettingModal');
@@ -1736,6 +1760,17 @@ function populateScheduleAndProfileInputs(data) {
   document.getElementById('profDefAddress').value = eff.defaultLocation?.address || '';
   document.getElementById('profDefLat').value = eff.defaultLocation?.latitude ?? '';
   document.getElementById('profDefLng').value = eff.defaultLocation?.longitude ?? '';
+
+  const offsetOn = eff.locationRandomOffsetEnabled !== false;
+  const offsetM = Number.isFinite(Number(eff.locationRandomOffsetMeters)) ? Number(eff.locationRandomOffsetMeters) : 15;
+  ['profRandomOffsetEnabled', 'locRandomOffsetEnabled'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.checked = offsetOn;
+  });
+  ['profRandomOffsetMeters', 'locRandomOffsetMeters'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el && document.activeElement !== el) el.value = offsetM;
+  });
 
   state._editingDiyLessons = JSON.parse(JSON.stringify(eff.diyLessons || []));
   renderDiyLessonsList(state._editingDiyLessons);
@@ -2408,9 +2443,24 @@ async function deleteCurrentDiyLesson() {
   await removeDiyLesson(idx);
 }
 
+function syncProfileRandomOffsetInputs(source = 'sched') {
+  const fromSwitch = document.getElementById(source === 'loc' ? 'locRandomOffsetEnabled' : 'profRandomOffsetEnabled');
+  const toSwitch = document.getElementById(source === 'loc' ? 'profRandomOffsetEnabled' : 'locRandomOffsetEnabled');
+  if (fromSwitch && toSwitch) toSwitch.checked = fromSwitch.checked;
+
+  const fromInput = document.getElementById(source === 'loc' ? 'locRandomOffsetMeters' : 'profRandomOffsetMeters');
+  const toInput = document.getElementById(source === 'loc' ? 'profRandomOffsetMeters' : 'locRandomOffsetMeters');
+  if (fromInput && toInput) toInput.value = fromInput.value;
+}
+
 async function saveUserProfileConfig() {
   const intervalSeconds = Number(document.getElementById('cfgIntervalSeconds').value || 25);
   await api('/api/schedule', 'POST', { intervalSeconds });
+
+  const offsetEnabledEl = document.getElementById('profRandomOffsetEnabled') || document.getElementById('locRandomOffsetEnabled');
+  const offsetMetersEl = document.getElementById('profRandomOffsetMeters') || document.getElementById('locRandomOffsetMeters');
+  const rawOffsetM = offsetMetersEl ? Number(offsetMetersEl.value) : 15;
+  const locationRandomOffsetMeters = Number.isFinite(rawOffsetM) && rawOffsetM >= 0 ? Math.min(500, rawOffsetM) : 15;
 
   const body = {
     uid: state.selectedUid,
@@ -2422,6 +2472,8 @@ async function saveUserProfileConfig() {
       latitude: Number(document.getElementById('profDefLat').value || 30.8328),
       longitude: Number(document.getElementById('profDefLng').value || 121.5035),
     },
+    locationRandomOffsetEnabled: offsetEnabledEl ? Boolean(offsetEnabledEl.checked) : true,
+    locationRandomOffsetMeters,
     diyLessons: state._editingDiyLessons || [],
   };
   const res = await api('/api/user/profile', 'POST', body);
@@ -4026,13 +4078,24 @@ async function initHelperMode(token) {
       }
     };
 
+    const hasPendingStudents = (sess) => {
+      if (!sess || sess.completed) return false;
+      const pList = Array.isArray(sess.pendingNames) ? sess.pendingNames : Array.isArray(sess.targetNames) ? sess.targetNames : [];
+      return pList.length > 0;
+    };
+
     applyHelpSections(sType, sType === 'location', res.session.designatedPlace || '', res.session.locationRange || '');
+    if (sType === 'qrCode' && hasPendingStudents(res.session)) {
+      startCameraQrScanner('help', { auto: true, retryFailedOnly: false });
+    }
     if (res.session.activeId) {
       try {
         const info = await api(
           `/api/courses/activeInfo?activeId=${encodeURIComponent(res.session.activeId)}&courseId=${encodeURIComponent(res.session.courseId || '')}&classId=${encodeURIComponent(res.session.classId || '')}&helperToken=${encodeURIComponent(token)}`
         );
         if (info.ok) {
+          const finalType = info.signType || sType;
+          if (state.helperSession) state.helperSession.signType = finalType;
           state.helperRequiredLocation = {
             designatedPlace: info.designatedPlace || '',
             locationRange: info.locationRange || '',
@@ -4043,7 +4106,12 @@ async function initHelperMode(token) {
           if (statEl) {
             statEl.textContent = formatAttendStatsBanner(info.signedCount, info.totalCount);
           }
-          applyHelpSections(info.signType || sType, info.needLocation, info.designatedPlace, info.locationRange);
+          applyHelpSections(finalType, info.needLocation, info.designatedPlace, info.locationRange);
+          if (finalType === 'qrCode' && hasPendingStudents(state.helperSession)) {
+            startCameraQrScanner('help', { auto: true, retryFailedOnly: false });
+          } else if (finalType && finalType !== 'qrCode') {
+            stopCameraQrScanner();
+          }
           if (info.needLocation && (info.requiredLatitude || info.designatedPlace)) {
             const latEl = document.getElementById('helpLat');
             const lngEl = document.getElementById('helpLng');
@@ -4077,7 +4145,16 @@ function renderHelperTargetStatusStrip(sess) {
 }
 
 async function submitHelperSign(retryFailedOnly = false) {
-  stopCameraQrScanner();
+  const isQrMode =
+    state.helperSession?.signType === 'qrCode' ||
+    document.getElementById('helpSectionQr')?.style.display !== 'none';
+  if (!isQrMode) {
+    stopCameraQrScanner();
+  } else {
+    _camSubmitting = true;
+    setHelpCamOverlayTip('已捕获二维码，正在提交签到...');
+  }
+
   const submitBtn = document.getElementById('helpMainSubmitBtn');
   if (submitBtn) {
     submitBtn.disabled = true;
@@ -4087,6 +4164,10 @@ async function submitHelperSign(retryFailedOnly = false) {
   if (box) {
     box.innerHTML = `<div class="helper-battle-report">正在提交签到，请稍候...</div>`;
   }
+
+  let shouldKeepQrCamOpen = false;
+  let nextRetryFailedOnly = Boolean(retryFailedOnly);
+  let remainingCountForCam = 0;
 
   try {
     const savedName = localStorage.getItem('ishit_helper_name') || state.helperPrimaryAccount?.name || '热心同学';
@@ -4105,6 +4186,9 @@ async function submitHelperSign(retryFailedOnly = false) {
       if (box) {
         box.innerHTML = `<div class="helper-battle-report report-fail"><strong>提交失败：</strong>${escapeHtml(res.msg || '请检查签到信息后重试')}</div>`;
       }
+      if (isQrMode) {
+        shouldKeepQrCamOpen = true;
+      }
       showToast(res.msg || '提交失败');
       return;
     }
@@ -4119,6 +4203,17 @@ async function submitHelperSign(retryFailedOnly = false) {
     const failList = results.filter((r) => !r.ok);
     const remainingNames = Array.isArray(res.remainingNames) ? res.remainingNames : failList.map((r) => r.name);
     const allDone = remainingNames.length === 0 && (okList.length > 0 || (res.allSucceededNames || []).length > 0);
+
+    if (isQrMode) {
+      if (allDone) {
+        shouldKeepQrCamOpen = false;
+        stopCameraQrScanner();
+      } else {
+        shouldKeepQrCamOpen = true;
+        remainingCountForCam = remainingNames.length;
+        nextRetryFailedOnly = okList.length > 0 || (res.allSucceededNames || []).length > 0;
+      }
+    }
 
     let reportCls = 'helper-battle-report report-fail';
     let headline = '暂未签上，请核对签到信息后重试';
@@ -4215,9 +4310,22 @@ async function submitHelperSign(retryFailedOnly = false) {
       );
     }
   } finally {
+    _camSubmitting = false;
     if (submitBtn) {
       submitBtn.disabled = false;
       submitBtn.textContent = '提交签到';
+    }
+    if (shouldKeepQrCamOpen && isQrMode) {
+      const tipText =
+        remainingCountForCam > 0
+          ? `还有 ${remainingCountForCam} 名同学未签上，相机已就绪，请对准最新二维码自动继续扫码`
+          : '暂未全部签上，相机保持开启，请对准课堂二维码继续扫码重试';
+      await startCameraQrScanner('help', {
+        auto: true,
+        retryFailedOnly: nextRetryFailedOnly,
+        cooldownMs: 1200,
+        tipText,
+      });
     }
   }
 }
@@ -4443,6 +4551,26 @@ async function submitHelperPointClaim(explicitToken) {
 let _camStream = null;
 let _camScanRaf = null;
 let _camActiveMode = null;
+let _camSubmitting = false;
+let _camScanPausedUntil = 0;
+let _camRetryFailedOnly = false;
+
+function setHelpCamOverlayTip(text) {
+  const tipEl = document.getElementById('helpCamOverlayTip');
+  if (tipEl && text) tipEl.textContent = text;
+}
+
+function setHelpCamFallbackTip(text) {
+  const el = document.getElementById('helpCamFallbackTip');
+  if (!el) return;
+  if (text) {
+    el.textContent = text;
+    el.style.display = 'block';
+  } else {
+    el.textContent = '';
+    el.style.display = 'none';
+  }
+}
 
 function stopCameraQrScanner() {
   if (_camScanRaf) {
@@ -4464,6 +4592,9 @@ function stopCameraQrScanner() {
     if (btn) btn.textContent = '打开相机扫码';
   });
   _camActiveMode = null;
+  _camSubmitting = false;
+  _camScanPausedUntil = 0;
+  _camRetryFailedOnly = false;
 }
 
 async function openCameraStreamWithFallback() {
@@ -4483,31 +4614,67 @@ async function openCameraStreamWithFallback() {
   throw lastErr || new Error("Camera access failed");
 }
 
-async function toggleCameraQrScanner(prefix = "manual") {
-  if (_camActiveMode === prefix && _camStream) {
-    stopCameraQrScanner();
-    return;
+async function startCameraQrScanner(prefix = "manual", opts = {}) {
+  const isAuto = Boolean(opts.auto);
+  if (opts.retryFailedOnly !== undefined) {
+    _camRetryFailedOnly = Boolean(opts.retryFailedOnly);
   }
-  stopCameraQrScanner();
-
-  if (!isStandaloneClientEnv() && location.protocol === "http:" && String(location.hostname || "").toLowerCase() === "ishit.pw") {
-    showToast("正在切换 HTTPS 安全环境以启用相机扫码...");
-    location.href = "https://ishit.pw" + location.pathname + location.search + location.hash;
-    return;
+  if (opts.cooldownMs && Number(opts.cooldownMs) > 0) {
+    _camScanPausedUntil = Date.now() + Number(opts.cooldownMs);
   }
-
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    showToast("当前浏览器限制直接调起摄像头，已为您打开拍照/选图识别");
-    const section = document.getElementById(prefix === "help" ? "helpSectionQr" : "manualSectionQr");
-    const fileInput = section ? section.querySelector('input[type="file"]') : null;
-    if (fileInput) fileInput.click();
-    return;
+  if (prefix === "help") {
+    setHelpCamFallbackTip('');
+    setHelpCamOverlayTip(
+      opts.tipText ||
+        (_camRetryFailedOnly
+          ? '还有同学未签上：请将最新二维码对准画面，自动重试未签账号'
+          : '相机常驻扫码中：将二维码对准画面，识别后立即自动提交签到')
+    );
   }
 
   const stage = document.getElementById(`${prefix}CamStage`);
   const video = document.getElementById(`${prefix}CamVideo`);
   const btn = document.getElementById(`${prefix}CamBtn`);
   const targetInputId = prefix === "help" ? "helpQrUrl" : "manualQrUrl";
+
+  const hasLiveTrack =
+    _camStream &&
+    typeof _camStream.getVideoTracks === 'function' &&
+    _camStream.getVideoTracks().some((t) => t.readyState === 'live');
+  if (_camActiveMode === prefix && hasLiveTrack && stage && video) {
+    stage.style.display = "block";
+    if (btn) btn.textContent = "关闭相机";
+    try {
+      if (video.paused) await video.play();
+    } catch (_) {}
+    return true;
+  }
+
+  stopCameraQrScanner();
+  if (opts.retryFailedOnly !== undefined) {
+    _camRetryFailedOnly = Boolean(opts.retryFailedOnly);
+  }
+  if (opts.cooldownMs && Number(opts.cooldownMs) > 0) {
+    _camScanPausedUntil = Date.now() + Number(opts.cooldownMs);
+  }
+
+  if (!isStandaloneClientEnv() && location.protocol === "http:" && String(location.hostname || "").toLowerCase() === "ishit.pw") {
+    showToast("正在切换 HTTPS 安全环境以启用相机扫码...");
+    location.href = "https://ishit.pw" + location.pathname + location.search + location.hash;
+    return false;
+  }
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    if (isAuto && prefix === "help") {
+      setHelpCamFallbackTip("当前浏览器环境不支持直接调起摄像头，请点击下方「拍照 / 相册识码」上传或拍摄二维码");
+      return false;
+    }
+    showToast("当前浏览器限制直接调起摄像头，已为您打开拍照/选图识别");
+    const section = document.getElementById(prefix === "help" ? "helpSectionQr" : "manualSectionQr");
+    const fileInput = section ? section.querySelector('input[type="file"]') : null;
+    if (fileInput) fileInput.click();
+    return false;
+  }
 
   try {
     _camStream = await openCameraStreamWithFallback();
@@ -4532,7 +4699,7 @@ async function toggleCameraQrScanner(prefix = "manual") {
     let frameCount = 0;
     const scanTick = async () => {
       if (!_camStream || _camActiveMode !== prefix) return;
-      if (video.readyState >= video.HAVE_ENOUGH_DATA && video.videoWidth > 0) {
+      if (!_camSubmitting && Date.now() >= _camScanPausedUntil && video.readyState >= video.HAVE_ENOUGH_DATA && video.videoWidth > 0) {
         frameCount++;
         let qrText = null;
         if (typeof window.jsQR === "function") {
@@ -4546,7 +4713,6 @@ async function toggleCameraQrScanner(prefix = "manual") {
           if (code && code.data) {
             qrText = code.data.trim();
           } else if (frameCount % 2 === 0) {
-            // 中心区域放大裁剪识别（应对远距离拍摄屏幕小二维码）
             const cropSize = Math.floor(Math.min(vw, vh) * 0.62);
             const sx = Math.floor((vw - cropSize) / 2);
             const sy = Math.floor((vh - cropSize) / 2);
@@ -4567,22 +4733,45 @@ async function toggleCameraQrScanner(prefix = "manual") {
           } catch (_) {}
         }
         if (qrText) {
-          document.getElementById(targetInputId).value = qrText;
-          stopCameraQrScanner();
-          showToast("扫码成功，正在自动提交签到...");
-          if (prefix === "help") submitHelperSign(false);
-          else submitManualSign();
-          return;
+          const targetEl = document.getElementById(targetInputId);
+          if (targetEl) targetEl.value = qrText;
+          if (prefix === "help") {
+            _camSubmitting = true;
+            _camScanPausedUntil = Date.now() + 1800;
+            setHelpCamOverlayTip("已捕获二维码，正在自动提交签到...");
+            showToast("扫码成功，正在自动提交签到...");
+            submitHelperSign(_camRetryFailedOnly);
+          } else {
+            stopCameraQrScanner();
+            showToast("扫码成功，正在自动提交签到...");
+            submitManualSign();
+            return;
+          }
         }
       }
       _camScanRaf = requestAnimationFrame(scanTick);
     };
 
     _camScanRaf = requestAnimationFrame(scanTick);
+    return true;
   } catch (err) {
     stopCameraQrScanner();
-    showToast("无法直接调起摄像头，请使用右侧「拍照/相册识别」");
+    if (prefix === "help") {
+      setHelpCamFallbackTip("未授予摄像头权限或无法直接调起相机，请点击「打开相机扫码」授权或使用「拍照 / 相册识码」");
+    }
+    if (!isAuto) {
+      showToast("无法直接调起摄像头，请使用右侧「拍照/相册识别」");
+    }
+    return false;
   }
+}
+
+async function toggleCameraQrScanner(prefix = "manual") {
+  if (_camActiveMode === prefix && _camStream) {
+    stopCameraQrScanner();
+    return;
+  }
+  await startCameraQrScanner(prefix, { auto: false, retryFailedOnly: _camRetryFailedOnly });
 }
 
 function loadFileAsImageElement(file) {
@@ -4749,7 +4938,7 @@ async function decodeQrImage(input, targetInputId, autoSubmit = false) {
     if (targetEl) targetEl.value = qrText;
     if (autoSubmit || targetInputId === "helpQrUrl") {
       showToast("二维码解析成功，正在自动提交签到...");
-      submitHelperSign();
+      submitHelperSign(_camRetryFailedOnly);
     } else {
       showToast("二维码解析成功，已填入签到框");
     }

@@ -117,6 +117,8 @@ function createDefaultUserProfile() {
       latitude: 30.8328,
       longitude: 121.5035,
     },
+    locationRandomOffsetEnabled: true,
+    locationRandomOffsetMeters: 15,
     courseSettings: {},
     coursesCache: [],
     curriculumCache: null,
@@ -275,6 +277,11 @@ function ensureUserProfile(uid) {
 function getEffectiveUserProfile(uid) {
   const raw = ensureUserProfile(uid);
   raw.diyLessons = Array.isArray(raw.diyLessons) ? raw.diyLessons : [];
+  const resolveOffsetEnabled = (p) => (p && p.locationRandomOffsetEnabled !== undefined ? Boolean(p.locationRandomOffsetEnabled) : true);
+  const resolveOffsetMeters = (p) => {
+    const n = Number(p?.locationRandomOffsetMeters);
+    return Number.isFinite(n) && n >= 0 ? Math.min(500, n) : 15;
+  };
   if (raw.inheritFromUid && raw.inheritFromUid !== uid && store.userProfiles[raw.inheritFromUid]) {
     const target = store.userProfiles[raw.inheritFromUid];
     return {
@@ -282,6 +289,8 @@ function getEffectiveUserProfile(uid) {
       useCurriculumSchedule: target.useCurriculumSchedule,
       curriculumBufferMinutes: target.curriculumBufferMinutes,
       defaultLocation: target.defaultLocation,
+      locationRandomOffsetEnabled: resolveOffsetEnabled(target),
+      locationRandomOffsetMeters: resolveOffsetMeters(target),
       slots: target.slots,
       diyLessons: Array.isArray(target.diyLessons) ? target.diyLessons : raw.diyLessons,
       courseSettings: { ...target.courseSettings, ...raw.courseSettings },
@@ -291,6 +300,8 @@ function getEffectiveUserProfile(uid) {
   }
   return {
     ...raw,
+    locationRandomOffsetEnabled: resolveOffsetEnabled(raw),
+    locationRandomOffsetMeters: resolveOffsetMeters(raw),
     diyLessons: raw.diyLessons,
     effectiveCurriculum: raw.curriculumCache,
     inheritedFrom: null,

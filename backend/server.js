@@ -296,6 +296,16 @@ function mergeCoursesForUser(uid) {
         isTestCourse: Boolean(st.isTestCourse),
         testPollingEnabled: st.testPollingEnabled !== undefined ? Boolean(st.testPollingEnabled) : true,
         location: st.location || null,
+        randomOffsetEnabled:
+          st.randomOffsetEnabled !== undefined
+            ? Boolean(st.randomOffsetEnabled)
+            : eff.locationRandomOffsetEnabled !== false,
+        randomOffsetMeters:
+          st.randomOffsetMeters !== undefined && Number.isFinite(Number(st.randomOffsetMeters))
+            ? Math.max(0, Math.min(500, Number(st.randomOffsetMeters)))
+            : Number.isFinite(Number(eff.locationRandomOffsetMeters))
+            ? Math.max(0, Math.min(500, Number(eff.locationRandomOffsetMeters)))
+            : 15,
         imageObjectIds: st.imageObjectIds || [],
       },
     };
@@ -1072,6 +1082,12 @@ const server = http.createServer(async (req, res) => {
       if (body.useCurriculumSchedule !== undefined) prof.useCurriculumSchedule = Boolean(body.useCurriculumSchedule);
       if (body.curriculumBufferMinutes !== undefined) prof.curriculumBufferMinutes = Number(body.curriculumBufferMinutes);
       if (body.defaultLocation !== undefined) prof.defaultLocation = body.defaultLocation;
+      if (body.locationRandomOffsetEnabled !== undefined) {
+        prof.locationRandomOffsetEnabled = Boolean(body.locationRandomOffsetEnabled);
+      }
+      if (body.locationRandomOffsetMeters !== undefined && !Number.isNaN(Number(body.locationRandomOffsetMeters))) {
+        prof.locationRandomOffsetMeters = Math.max(0, Math.min(500, Number(body.locationRandomOffsetMeters)));
+      }
       if (body.slots !== undefined) prof.slots = body.slots;
       if (body.diyLessons !== undefined && Array.isArray(body.diyLessons)) {
         prof.diyLessons = body.diyLessons.map((item, idx) => ({
@@ -1100,6 +1116,12 @@ const server = http.createServer(async (req, res) => {
         prof.useCurriculumSchedule = src.useCurriculumSchedule;
         prof.curriculumBufferMinutes = src.curriculumBufferMinutes;
         prof.defaultLocation = JSON.parse(JSON.stringify(src.defaultLocation));
+        prof.locationRandomOffsetEnabled =
+          src.locationRandomOffsetEnabled !== undefined ? Boolean(src.locationRandomOffsetEnabled) : true;
+        prof.locationRandomOffsetMeters =
+          Number.isFinite(Number(src.locationRandomOffsetMeters)) && Number(src.locationRandomOffsetMeters) >= 0
+            ? Math.min(500, Number(src.locationRandomOffsetMeters))
+            : 15;
         prof.slots = JSON.parse(JSON.stringify(src.slots || []));
         prof.diyLessons = JSON.parse(JSON.stringify(src.diyLessons || []));
         prof.courseSettings = JSON.parse(JSON.stringify(src.courseSettings || {}));
@@ -1180,6 +1202,8 @@ const server = http.createServer(async (req, res) => {
           isTestCourse: false,
           testPollingEnabled: prev.testPollingEnabled !== undefined ? Boolean(prev.testPollingEnabled) : true,
           location: prev.location || null,
+          ...(prev.randomOffsetEnabled !== undefined ? { randomOffsetEnabled: Boolean(prev.randomOffsetEnabled) } : {}),
+          ...(prev.randomOffsetMeters !== undefined ? { randomOffsetMeters: Number(prev.randomOffsetMeters) } : {}),
           imageObjectIds: prev.imageObjectIds || [],
         };
         updatedCount++;
@@ -1193,7 +1217,16 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/courses/settings' && req.method === 'POST') {
       const body = await readBodyJson(req);
       const uid = body.uid || store.currentUid || store.accounts?.[0]?.uid;
-      const { courseId, pollingEnabled, isTestCourse, testPollingEnabled, location, imageObjectIds } = body;
+      const {
+        courseId,
+        pollingEnabled,
+        isTestCourse,
+        testPollingEnabled,
+        location,
+        randomOffsetEnabled,
+        randomOffsetMeters,
+        imageObjectIds,
+      } = body;
       if (!uid || !courseId) return sendJson(res, { ok: false, msg: '缺少参数' });
       if (!canSessionEditCxAccount(currentSess, uid)) {
         return sendJson(res, { ok: false, msg: '只读模式：无法修改其他用户的课程设置' }, 403);
@@ -1221,6 +1254,16 @@ const server = http.createServer(async (req, res) => {
             ? Boolean(prev.testPollingEnabled)
             : true,
         location: location !== undefined ? location : prev.location,
+        ...(randomOffsetEnabled !== undefined
+          ? { randomOffsetEnabled: Boolean(randomOffsetEnabled) }
+          : prev.randomOffsetEnabled !== undefined
+          ? { randomOffsetEnabled: Boolean(prev.randomOffsetEnabled) }
+          : {}),
+        ...(randomOffsetMeters !== undefined && !Number.isNaN(Number(randomOffsetMeters))
+          ? { randomOffsetMeters: Math.max(0, Math.min(500, Number(randomOffsetMeters))) }
+          : prev.randomOffsetMeters !== undefined
+          ? { randomOffsetMeters: Math.max(0, Math.min(500, Number(prev.randomOffsetMeters))) }
+          : {}),
         imageObjectIds: imageObjectIds !== undefined ? imageObjectIds : prev.imageObjectIds,
       };
       saveStore();

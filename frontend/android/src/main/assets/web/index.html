@@ -57,19 +57,20 @@
       <!-- 签到大师身份提示栏 -->
       <div id="helpIdentityBanner" class="helper-identity-banner" style="margin-top:10px;"></div>
 
-      <!-- 二维码扫码区块（仅 qrCode 显示）：大尺寸核心按钮置顶，扫完立即自动提交 -->
+      <!-- 二维码扫码区块（仅 qrCode 显示）：打开默认常驻开启相机，扫完自动提交，有未签上同学自动重开相机继续扫 -->
       <div id="helpSectionQr" class="helper-action-section" style="display:none;">
-        <div class="helper-section-title">二维码签到（扫码后自动提交）</div>
+        <div class="helper-section-title">二维码签到（相机常驻自动扫码，全员签上后自动关闭）</div>
+        <div id="helpCamStage" style="display:none; position:relative; width:100%; max-width:390px; margin:8px auto 10px; border:2px solid var(--text); border-radius:10px; overflow:hidden; background:#000;">
+          <video id="helpCamVideo" playsinline muted style="width:100%; display:block; max-height:280px; object-fit:cover;"></video>
+          <div id="helpCamOverlayTip" style="position:absolute; bottom:0; left:0; right:0; text-align:center; font-size:12px; font-weight:600; color:#fff; background:rgba(0,0,0,0.72); padding:6px 8px;">相机常驻扫码中：对准课堂二维码将立即自动提交签到</div>
+        </div>
+        <div id="helpCamFallbackTip" style="display:none; font-size:12px; color:#b45309; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:6px 10px; margin-bottom:8px;"></div>
         <div class="helper-big-btn-grid">
           <button type="button" class="btn helper-giant-btn" id="helpCamBtn" onclick="toggleCameraQrScanner('help')">打开相机扫码</button>
           <label class="btn btn-ghost helper-giant-btn" style="margin:0; cursor:pointer; text-align:center;">
             拍照 / 相册识码
             <input type="file" accept="image/*" style="display:none;" onchange="decodeQrImage(this, 'helpQrUrl', true)" />
           </label>
-        </div>
-        <div id="helpCamStage" style="display:none; position:relative; width:100%; max-width:380px; margin:10px auto; border:2px solid var(--text); border-radius:10px; overflow:hidden; background:#000;">
-          <video id="helpCamVideo" playsinline muted style="width:100%; display:block; max-height:280px; object-fit:cover;"></video>
-          <div style="position:absolute; bottom:0; left:0; right:0; text-align:center; font-size:12px; font-weight:600; color:#fff; background:rgba(0,0,0,0.65); padding:6px 4px;">将二维码对准画面，识别后将立即自动提交签到</div>
         </div>
         <input id="helpQrUrl" placeholder="扫码后自动填入并提交，也可手动粘贴二维码链接或 enc" style="margin-top:8px;" />
       </div>
@@ -455,6 +456,22 @@
           </div>
         </div>
 
+        <div class="list-row" style="margin-bottom:12px; padding:8px 10px; background:var(--surface-sub); border-radius:8px; flex-wrap:wrap; gap:10px;">
+          <div style="flex:1; min-width:220px;">
+            <div style="font-weight:600; font-size:13px;">位置签到随机偏差（防同班预设坐标雷同）</div>
+            <div style="font-size:11px; color:var(--muted);">默认开启；无论使用课表预设位置、默认位置还是自动定位，每次签到均按账号叠加随机偏移</div>
+          </div>
+          <div class="row" style="gap:8px; flex-wrap:wrap;">
+            <label class="switch" title="开启或关闭随机位置偏差">
+              <input type="checkbox" id="profRandomOffsetEnabled" checked onchange="syncProfileRandomOffsetInputs('sched')" />
+              <span class="slider"></span>
+            </label>
+            <input type="number" id="profRandomOffsetMeters" min="0" max="500" value="15" style="width:78px;" oninput="syncProfileRandomOffsetInputs('sched')" />
+            <span style="font-size:12px; color:var(--muted);">m</span>
+            <button class="btn btn-ghost btn-sm" type="button" onclick="saveUserProfileConfig()">应用偏差</button>
+          </div>
+        </div>
+
         <div id="curriculumTableWrap" style="margin-top:12px; overflow-x:auto;"></div>
       </div>
 
@@ -512,6 +529,17 @@
             <div class="row" style="margin-top:6px;">
               <div style="flex:1;"><label>纬度</label><input id="profDefLat" /></div>
               <div style="flex:1;"><label>经度</label><input id="profDefLng" /></div>
+            </div>
+            <div class="list-row" style="margin-top:10px; padding-top:8px; border-top:1px solid var(--border); flex-wrap:wrap; gap:8px;">
+              <span style="font-size:12px;">随机偏差防雷同（预设与自动定位均生效）</span>
+              <div class="row" style="gap:6px;">
+                <label class="switch">
+                  <input type="checkbox" id="locRandomOffsetEnabled" checked onchange="syncProfileRandomOffsetInputs('loc')" />
+                  <span class="slider"></span>
+                </label>
+                <input type="number" id="locRandomOffsetMeters" min="0" max="500" value="15" style="width:74px;" oninput="syncProfileRandomOffsetInputs('loc')" />
+                <span style="font-size:12px; color:var(--muted);">m</span>
+              </div>
             </div>
           </div>
 
@@ -897,6 +925,21 @@
       <div style="flex:1;"><label>经度</label><input id="csLng" /></div>
     </div>
 
+    <div class="list-row" style="margin-top:10px; padding:8px 10px; background:var(--surface-sub); border-radius:8px; flex-wrap:wrap; gap:8px;">
+      <div>
+        <div style="font-size:12px; font-weight:600;">随机位置偏差（防同班多人预设坐标雷同）</div>
+        <div style="font-size:11px; color:var(--muted);">默认开启；选预设位置或自动定位均自动叠加随机米数偏移</div>
+      </div>
+      <div class="row" style="gap:6px;">
+        <label class="switch">
+          <input type="checkbox" id="csRandomOffsetEnabled" checked />
+          <span class="slider"></span>
+        </label>
+        <input type="number" id="csRandomOffsetMeters" min="0" max="500" value="15" style="width:74px;" />
+        <span style="font-size:12px; color:var(--muted);">m</span>
+      </div>
+    </div>
+
     <label style="margin-top:14px;">拍照签到图片池</label>
     <div id="csPhotoList" class="row" style="margin:6px 0;"></div>
     <input type="file" accept="image/*" onchange="uploadCoursePhoto(this)" />
@@ -1194,7 +1237,7 @@
   </div>
 </div>
 
-<script src="app.js?v=24"></script>
+<script src="app.js?v=25"></script>
 </body>
 </html>
 

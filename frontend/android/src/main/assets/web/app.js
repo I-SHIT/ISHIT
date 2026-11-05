@@ -4156,13 +4156,13 @@ async function submitHelperSign(retryFailedOnly = false) {
     const lockedSid = res.lockedHelperInfo?.studentId || res.creditedEntry?.studentId || state.helperPrimaryAccount?.studentId || '';
 
     let pointsCardHtml = '';
-    if (res.claimToken && (Number(res.earnedPoints || 0) > 0 || okList.length > 0)) {
+    if (allDone && res.claimToken && (Number(res.earnedPoints || 0) > 0 || okList.length > 0 || (res.allSucceededNames || []).length > 0)) {
       if (isHelperLogged) {
         pointsCardHtml = `
         <div class="helper-claim-card" id="helperClaimCardBox" style="background:#f0fdf4; border-color:#86efac;">
           <div class="row" style="justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
             <div>
-              <div style="font-weight:700; color:#166534;">${Number(res.earnedPoints || 0) > 0 ? `积分 +${res.earnedPoints} 已归入你的账号` : '协助完成'}</div>
+              <div style="font-weight:700; color:#166534;">${Number(res.earnedPoints || 0) > 0 ? `全部同学已安全签上 · 积分 +${res.earnedPoints} 已归入你的账号` : '全部同学已安全签上'}</div>
               <div style="font-size:12px; color:#15803d; margin-top:3px;">
                 已锁定辅助人：<strong>${escapeHtml(lockedName || '当前登录账号')}</strong>${lockedSid ? `（学号：${escapeHtml(lockedSid)}）` : ''}${res.creditedEntry?.score !== undefined ? ` · 总分：<strong>${res.creditedEntry.score} 分</strong>` : ''}
               </div>
@@ -4175,13 +4175,21 @@ async function submitHelperSign(retryFailedOnly = false) {
         <div class="helper-claim-card" id="helperClaimCardBox">
           <div class="row" style="justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
             <div>
-              <div style="font-weight:700; font-size:13px;">${Number(res.earnedPoints || 0) > 0 ? `本次成功帮签 +${res.earnedPoints} 人` : '协助签到完成'}</div>
+              <div style="font-weight:700; font-size:13px;">${Number(res.earnedPoints || 0) > 0 ? `全部同学已安全签上 · 累计帮签 +${res.earnedPoints} 人` : '全部同学已安全签上'}</div>
               <div style="font-size:11px; color:var(--muted); margin-top:2px;">填写名称与学号计入排行榜，并可附带留言与图片</div>
             </div>
             <button type="button" class="btn btn-sm" onclick="openHelperClaimModal('${escapeHtml(res.claimToken)}', ${Number(res.earnedPoints || 0)}, false, '', '', false)">填写名称与留言${Number(res.earnedPoints || 0) > 0 ? ` (+${res.earnedPoints}分)` : ''}</button>
           </div>
         </div>`;
       }
+    } else if (!allDone && remainingNames.length > 0 && (okList.length > 0 || Number(res.pendingPoints || 0) > 0)) {
+      const pendingPts = Number(res.pendingPoints || okList.length || 0);
+      pointsCardHtml = `
+      <div class="helper-claim-card" style="background:#fffbeb; border-color:#fde68a;">
+        <div style="font-weight:700; font-size:12px; color:#b45309;">
+          已暂存帮签进度（累计 ${pendingPts} 人）· 还有 ${remainingNames.length} 名同学未签上，请先点击上方按钮重试，确保全部同学安全后再统一弹出加分与留言
+        </div>
+      </div>`;
     }
 
     if (box) {
@@ -4193,9 +4201,10 @@ async function submitHelperSign(retryFailedOnly = false) {
         ${pointsCardHtml}
       </div>`;
     }
-    showToast(allDone ? '全部签到成功' : remainingNames.length > 0 ? `部分未签上（剩余 ${remainingNames.length} 人需重试）` : '提交完成');
+    showToast(allDone ? '全部签到成功' : remainingNames.length > 0 ? `还有 ${remainingNames.length} 名同学未签上，请先重试确保全员安全` : '提交完成');
 
-    if (res.claimToken && (Number(res.earnedPoints || 0) > 0 || okList.length > 0)) {
+    // 仅当全部同学安全签上（allDone === true）时，才弹出签后加分与留言窗口
+    if (allDone && res.claimToken && (Number(res.earnedPoints || 0) > 0 || okList.length > 0 || (res.allSucceededNames || []).length > 0)) {
       openHelperClaimModal(
         res.claimToken,
         Number(res.earnedPoints || 0),

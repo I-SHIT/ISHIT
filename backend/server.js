@@ -1883,8 +1883,13 @@ const server = http.createServer(async (req, res) => {
         hs.updatedAt = Date.now();
         hs.lastResult = record;
 
-        const earnedPoints = newlyCreditedUsers.length;
-        const okResultsNow = (record.results || []).filter((r) => r.ok);
+        const totalCreditedUids = Array.from(prevCreditedSet);
+        const totalCreditedNames = totalCreditedUids.map(
+          (u) => (store.accounts || []).find((a) => String(a.uid) === u)?.name || u
+        );
+        // 只有确保全部目标同学安全签上（remainingUids.length === 0）后，才统一结算加分与弹出签后留言
+        const earnedPoints = hs.completed ? totalCreditedUids.length : 0;
+        const pendingPoints = !hs.completed ? totalCreditedUids.length : 0;
         const isLoggedInHelper = Boolean(currentSess);
         const lockedHelperName = String(helperAcc?.name || currentSess?.username || '').trim();
         const lockedHelperSid = String(helperAcc?.studentId || helperAcc?.uid || currentSess?.username || '').trim();
@@ -1892,10 +1897,13 @@ const server = http.createServer(async (req, res) => {
         let creditedEntry = null;
         let claimToken = '';
 
-        if (earnedPoints > 0 || okResultsNow.length > 0) {
+        if (hs.completed && !hs.rewardSettled) {
+          hs.rewardSettled = true;
           claimToken = EncryptionUtil.getUniqueId();
+          hs.claimToken = claimToken;
           store.helperClaims = store.helperClaims || {};
           const explicitSid = String(body.studentId || '').trim();
+          const finalHelpedNames = totalCreditedNames.length > 0 ? totalCreditedNames : allSucceededNames;
           if (isLoggedInHelper || helperAcc || explicitSid) {
             // 已登录 ISHIT 账号：填名区域默认锁定为自己，积分自动归入自己名下
             const targetSid = explicitSid || lockedHelperSid;
@@ -1918,7 +1926,7 @@ const server = http.createServer(async (req, res) => {
               points: earnedPoints,
               activeId: hs.activeId,
               courseName: hs.courseName,
-              helpedNames: (newlyCreditedUsers.length > 0 ? newlyCreditedUsers : okResultsNow).map((u) => u.name || u.uid),
+              helpedNames: finalHelpedNames,
               createdAt: Date.now(),
               claimed: true,
               autoCredited: true,
@@ -1933,7 +1941,7 @@ const server = http.createServer(async (req, res) => {
               points: earnedPoints,
               activeId: hs.activeId,
               courseName: hs.courseName,
-              helpedNames: (newlyCreditedUsers.length > 0 ? newlyCreditedUsers : okResultsNow).map((u) => u.name || u.uid),
+              helpedNames: finalHelpedNames,
               createdAt: Date.now(),
               claimed: earnedPoints === 0,
               autoCredited: false,
@@ -1941,9 +1949,8 @@ const server = http.createServer(async (req, res) => {
             };
           }
 
-          // 写入【签到悬赏 - 完成记录】（记录协助者、签到者、加分情况、后续可补充留言与图片）
-          const signedNameList = (newlyCreditedUsers.length > 0 ? newlyCreditedUsers : okResultsNow).map((u) => u.name || u.uid);
-          if (signedNameList.length > 0) {
+          // 写入【签到悬赏 - 完成记录】（全部同学安全后统一生成一条完整记录）
+          if (finalHelpedNames.length > 0) {
             store.bountyHistory = Array.isArray(store.bountyHistory) ? store.bountyHistory : [];
             store.bountyHistory.unshift({
               id: claimToken,
@@ -1962,13 +1969,19 @@ const server = http.createServer(async (req, res) => {
               helperStudentId: isLoggedInHelper ? lockedHelperSid : (creditedEntry?.studentId || ''),
               helperAvatar: creditedEntry?.avatar || helperAcc?.avatar || (helperAcc?.uid ? `https://photo.chaoxing.com/p/${helperAcc.uid}_80` : ''),
               isLoggedInHelper,
-              signedNames: signedNameList,
+              signedNames: allSucceededNames.length > 0 ? allSucceededNames : finalHelpedNames,
               earnedPoints,
               pointsClaimed: Boolean(isLoggedInHelper || autoCredited),
               commentText: '',
               commentImage: '',
             });
             if (store.bountyHistory.length > 100) store.bountyHistory.length = 100;
+          }
+        } else if (hs.completed && hs.rewardSettled && hs.claimToken) {
+          claimToken = hs.claimToken;
+          const existingClaim = store.helperClaims?.[claimToken];
+          if (existingClaim) {
+            autoCredited = Boolean(existingClaim.autoCredited);
           }
         }
 
@@ -1977,7 +1990,9 @@ const server = http.createServer(async (req, res) => {
           ok: true,
           record,
           session: hs,
+          allSafe: Boolean(hs.completed),
           earnedPoints,
+          pendingPoints,
           autoCredited,
           creditedEntry,
           claimToken,

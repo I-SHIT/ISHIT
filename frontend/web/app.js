@@ -457,8 +457,8 @@ function switchMainModule(mod) {
       hintEl.textContent = '仪表盘';
       updateWinTopbarTitle('实时仪表盘');
     } else if (mod === 'bounty') {
-      hintEl.textContent = '实时签到悬赏雷达 · 签到大师排行榜';
-      updateWinTopbarTitle('签到悬赏与大师榜');
+      hintEl.textContent = '签到悬赏与大师榜';
+      updateWinTopbarTitle('签到悬赏');
       updateNotifyPermButtonText();
     } else if (mod === 'user') {
       const curAcc = (state.status?.accounts || []).find((a) => String(a.uid) === String(state.selectedUid));
@@ -845,7 +845,7 @@ function renderOverview(data, syncInputs) {
     if (modeSummaryEl) {
       const mText = data.schedule.forcePolling ? '持续轮询模式' : '课表轮询模式';
       const pText = data.schedule.signThresholdEnabled
-        ? ` · 人数保护 ≥${Math.round(Number(data.schedule.signThresholdRatio || 0.3) * 100)}% (含临期抢签)`
+        ? ` · 人数保护 >=${Math.round(Number(data.schedule.signThresholdRatio || 0.3) * 100)}% (含临期抢签)`
         : ' · 发现即签';
       modeSummaryEl.textContent = `当前策略：${mText}（间隔 ${data.schedule.intervalSeconds || 25}s${pText}）`;
     }
@@ -892,20 +892,20 @@ function renderOverview(data, syncInputs) {
           ? `班级已签: ${signedNum}/${totalNum} 人 (${Math.round((signedNum / totalNum) * 100)}%)`
           : `班级已签: ${signedNum} 人`;
         const waitBadge = act.waitingThreshold
-          ? `<span class="tag" style="margin-left:6px; background:#fef3c7; color:#92400e; border-color:#fde68a;">⏳ 等待达标(${Math.round((act.thresholdRatio || 0.3) * 100)}%)</span>`
+          ? `<span class="tag" style="margin-left:6px; background:#fef3c7; color:#92400e; border-color:#fde68a;">等待达标(${Math.round((act.thresholdRatio || 0.3) * 100)}%)</span>`
           : '';
         const remainSec = act.endTimeMs && act.endTimeMs > Date.now()
           ? Math.max(0, Math.round((act.endTimeMs - Date.now()) / 1000))
           : null;
         const remainBadge = remainSec !== null
-          ? `<span class="tag" style="margin-left:6px; color:#dc2626; border-color:#fecaca;">⏱ 剩余 ${remainSec >= 60 ? Math.floor(remainSec / 60) + '分' + (remainSec % 60) + '秒' : remainSec + '秒'}</span>`
+          ? `<span class="tag" style="margin-left:6px; color:#dc2626; border-color:#fecaca;">剩余 ${remainSec >= 60 ? Math.floor(remainSec / 60) + '分' + (remainSec % 60) + '秒' : remainSec + '秒'}</span>`
           : '';
         const pendingNames = Array.isArray(item.pendingNames) ? item.pendingNames : [];
         const succeededNames = Array.isArray(item.succeededNames) ? item.succeededNames : [];
         const pillsHtml = (pendingNames.length > 0 || succeededNames.length > 0)
           ? `<div class="bounty-student-pills">
-              ${pendingNames.map((n) => `<span class="student-pill pending">⏳ 待签: ${escapeHtml(n)}</span>`).join('')}
-              ${succeededNames.map((n) => `<span class="student-pill done">✅ 已签: ${escapeHtml(n)}</span>`).join('')}
+              ${pendingNames.map((n) => `<span class="student-pill pending">待签: ${escapeHtml(n)}</span>`).join('')}
+              ${succeededNames.map((n) => `<span class="student-pill done">已签: ${escapeHtml(n)}</span>`).join('')}
             </div>`
           : '';
         const ctx = {
@@ -921,13 +921,13 @@ function renderOverview(data, syncInputs) {
           totalCount: totalNum,
         };
         const directHelpBtn = item.helperToken
-          ? `<button class="btn btn-sm" onclick="openInAppBountyAssist('${escapeHtml(item.helperToken)}', 'global')">⚡ 极速帮签</button>`
+          ? `<button class="btn btn-sm" onclick="openInAppBountyAssist('${escapeHtml(item.helperToken)}', 'global')">帮签</button>`
           : `<button class="btn btn-sm" onclick='openManualSignModal(${JSON.stringify(ctx).replace(/'/g, "&#39;")})'>签到</button>`;
         return `
       <div class="list-row" style="align-items:flex-start;">
         <div style="flex:1; min-width:0;">
           <div style="font-weight:600;">${escapeHtml(ctx.courseName)} · ${escapeHtml(ctx.name)}${waitBadge}${remainBadge}</div>
-          <div style="font-size:11px; color:var(--muted); margin-top:2px;">类型: ${escapeHtml(ctx.signTypeName)} | ${escapeHtml(ratioStr)} | ⚡ 实时同步中</div>
+          <div style="font-size:11px; color:var(--muted); margin-top:2px;">类型: ${escapeHtml(ctx.signTypeName)} | ${escapeHtml(ratioStr)}</div>
           ${pillsHtml}
         </div>
         <div class="row" style="flex-shrink:0;">
@@ -3094,9 +3094,9 @@ async function forceSyncBountyBoard() {
   const tag = document.getElementById('bountySyncStatusTag');
   if (btn) {
     btn.disabled = true;
-    btn.textContent = '🔄 同步中...';
+    btn.textContent = '同步中...';
   }
-  if (tag) tag.textContent = '⚡ 正在向学习通校验最新状态...';
+  if (tag) tag.textContent = '同步中';
   try {
     await api('/api/bounties/sync', 'POST', {});
     await refreshStatus(false);
@@ -3106,9 +3106,9 @@ async function forceSyncBountyBoard() {
   } finally {
     if (btn) {
       btn.disabled = false;
-      btn.textContent = '🔄 立即同步状态';
+      btn.textContent = '同步状态';
     }
-    if (tag) tag.textContent = '⚡ 3.5s 实时高同步';
+    if (tag) tag.textContent = '实时同步';
   }
 }
 
@@ -3128,14 +3128,14 @@ function renderBountyAndLeaderboard(data) {
   });
 
   const countTag = document.getElementById('bountyActiveCountTag');
-  if (countTag) countTag.textContent = `${bounties.length} 个进行中悬赏`;
+  if (countTag) countTag.textContent = `${bounties.length} 项`;
   const lbTag = document.getElementById('leaderboardCountTag');
-  if (lbTag) lbTag.textContent = `${leaderboard.length} 位签到大师`;
+  if (lbTag) lbTag.textContent = `${leaderboard.length} 人`;
 
   const bountyBox = document.getElementById('bountyBoardList');
   if (bountyBox) {
     if (bounties.length === 0) {
-      bountyBox.innerHTML = `<div class="empty" style="padding:28px 14px;">🎉 当前暂无待求助的未完成签到<br/><span style="font-size:11px; color:var(--muted);">一旦有二维码/手势/位置/滑块签到，或尚未签上的课堂活动，将在此秒级置顶展示</span></div>`;
+      bountyBox.innerHTML = `<div class="empty" style="padding:24px 14px;">暂无未完成签到</div>`;
     } else {
       bountyBox.innerHTML = bounties
         .map((b) => {
@@ -3145,9 +3145,9 @@ function renderBountyAndLeaderboard(data) {
             ? 'bounty-card bounty-my-course'
             : 'bounty-card';
           const priorityBadge = b.includesMe
-            ? `<span class="tag bounty-badge-urgent">🔥 本人待签</span>`
+            ? `<span class="tag bounty-badge-urgent">本人待签</span>`
             : b.isMyCourse
-            ? `<span class="tag bounty-badge-course">⭐ 同课程优先</span>`
+            ? `<span class="tag bounty-badge-course">同课程</span>`
             : `<span class="tag">全站互助</span>`;
           const typeLabel = SIGN_TYPE_LABELS[b.signType] || b.signType || '课堂签到';
           const statsStr = b.totalCount > 0
@@ -3159,13 +3159,13 @@ function renderBountyAndLeaderboard(data) {
             ? Math.max(0, Math.round((b.endTimeMs - Date.now()) / 1000))
             : null;
           const remainHtml = remainSec !== null
-            ? `<span class="tag" style="color:#dc2626; border-color:#fecaca;">⏱ 剩余 ${remainSec >= 60 ? Math.floor(remainSec / 60) + '分' + (remainSec % 60) + '秒' : remainSec + '秒'}</span>`
+            ? `<span class="tag" style="color:#dc2626; border-color:#fecaca;">剩余 ${remainSec >= 60 ? Math.floor(remainSec / 60) + '分' + (remainSec % 60) + '秒' : remainSec + '秒'}</span>`
             : '';
           const placeHtml = b.designatedPlace
-            ? `<div style="font-size:12px; color:#b45309; margin-top:4px; font-weight:600;">📍 要求位置：${escapeHtml(b.designatedPlace)}${b.locationRange ? `（${escapeHtml(String(b.locationRange))}m内）` : ''}</div>`
+            ? `<div style="font-size:12px; color:#b45309; margin-top:4px; font-weight:600;">要求位置：${escapeHtml(b.designatedPlace)}${b.locationRange ? `（${escapeHtml(String(b.locationRange))}m内）` : ''}</div>`
             : '';
           const reasonHtml = b.failReason
-            ? `<div style="font-size:12px; color:var(--muted); margin-top:3px;">💬 求助说明：${escapeHtml(b.failReason)}</div>`
+            ? `<div style="font-size:12px; color:var(--muted); margin-top:3px;">原因：${escapeHtml(b.failReason)}</div>`
             : '';
           const pendingNames = Array.isArray(b.pendingNames) ? b.pendingNames : [];
           const succeededNames = Array.isArray(b.succeededNames) ? b.succeededNames : [];
@@ -3189,12 +3189,12 @@ function renderBountyAndLeaderboard(data) {
               </div>
             </div>
             <div class="bounty-student-pills">
-              ${pendingNames.map((n) => `<span class="student-pill pending">⏳ 待签: ${escapeHtml(n)}</span>`).join('')}
-              ${succeededNames.map((n) => `<span class="student-pill done">✅ 已签: ${escapeHtml(n)}</span>`).join('')}
+              ${pendingNames.map((n) => `<span class="student-pill pending">待签: ${escapeHtml(n)}</span>`).join('')}
+              ${succeededNames.map((n) => `<span class="student-pill done">已签: ${escapeHtml(n)}</span>`).join('')}
             </div>
             <div class="row" style="margin-top:10px; gap:8px; flex-wrap:wrap;">
-              <button type="button" class="btn btn-sm" style="flex:2; min-height:36px; font-weight:700;" onclick="openInAppBountyAssist('${escapeHtml(b.token)}', 'bounty')">⚡ 立即帮签（成功得 +${pendingNames.length || 1} 分）</button>
-              <button type="button" class="btn btn-ghost btn-sm" style="flex:1; min-height:36px;" onclick="copyTextValue('${escapeHtml(fullShareUrl)}', '互助链接已复制，可发给同学')">📋 复制求助链接</button>
+              <button type="button" class="btn btn-sm" style="flex:2; min-height:36px; font-weight:700;" onclick="openInAppBountyAssist('${escapeHtml(b.token)}', 'bounty')">帮签 (+${pendingNames.length || 1}分)</button>
+              <button type="button" class="btn btn-ghost btn-sm" style="flex:1; min-height:36px;" onclick="copyTextValue('${escapeHtml(fullShareUrl)}', '链接已复制')">复制链接</button>
             </div>
           </div>`;
         })
@@ -3205,13 +3205,13 @@ function renderBountyAndLeaderboard(data) {
   const lbBox = document.getElementById('masterLeaderboardList');
   if (lbBox) {
     if (leaderboard.length === 0) {
-      lbBox.innerHTML = `<div class="empty" style="padding:28px 14px;">🏆 虚位以待！帮他人完成签到即可荣登签到大师榜<br/><span style="font-size:11px; color:var(--muted);">每成功帮签 1 人次计 +1 分（支持登录主账号自动加分，或未登录事后填写名称+学号认领）</span></div>`;
+      lbBox.innerHTML = `<div class="empty" style="padding:24px 14px;">暂无排行记录</div>`;
     } else {
       lbBox.innerHTML = leaderboard
         .map((item, idx) => {
           const rank = item.rank || idx + 1;
           const rankCls = rank <= 3 ? `leaderboard-rank rank-${rank}` : 'leaderboard-rank';
-          const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : String(rank);
+          const medal = String(rank);
           const avatarHtml = item.avatar
             ? `<img src="${escapeHtml(item.avatar)}" class="leaderboard-avatar" alt="" onerror="this.style.display='none'" />`
             : `<div class="leaderboard-avatar" style="display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;">${escapeHtml((item.displayName || '侠').slice(0, 1))}</div>`;
@@ -3303,19 +3303,19 @@ function updateNotifyPermButtonText() {
   if (!btn) return;
   const plat = detectPlatformType();
   if (plat === 'windows' || plat === 'android') {
-    btn.textContent = '🔔 原生通知已就绪';
+    btn.textContent = '通知已开启';
     return;
   }
   if (!('Notification' in window)) {
-    btn.textContent = '🔔 页内横幅+声音提醒已启用';
+    btn.textContent = '横幅提醒已开启';
     return;
   }
   if (Notification.permission === 'granted') {
-    btn.textContent = '🔔 系统通知已开启';
+    btn.textContent = '通知已开启';
   } else if (Notification.permission === 'denied') {
-    btn.textContent = '🔕 浏览器通知被禁（已启用横幅+音效）';
+    btn.textContent = '已启用横幅提醒';
   } else {
-    btn.textContent = '🔔 点击开启浏览器系统通知';
+    btn.textContent = '开启通知';
   }
 }
 
@@ -3347,8 +3347,8 @@ function testCrossPlatformNotification() {
   const sampleAlert = {
     id: 'test_' + Date.now(),
     eventType: 'sign_detected',
-    title: '【ISHIT 实时通知就绪】发现签到 / 签到成功 / 签到失败均会立即提醒',
-    body: '点击通知或顶部横幅即可一键直达该课堂签到或悬赏大厅！',
+    title: '通知测试：签到提醒已就绪',
+    body: '发现签到、签到成功或签到失败时将推送通知。',
     courseName: '测试课程',
     activeName: '通知通路自检',
     helperToken: state.status?.bounties?.[0]?.token || '',
@@ -3445,16 +3445,16 @@ function showLiveSignAlertBanner(alertObj) {
   banner.classList.remove('alert-failed', 'alert-success', 'alert-detected');
   if (alertObj.eventType === 'sign_failed') {
     banner.classList.add('alert-failed');
-    if (badge) badge.textContent = '⚠️ 签到未通过 / 需协助';
-    if (btn) btn.textContent = alertObj.helperToken ? '⚡ 直达帮签' : '查看悬赏榜';
+    if (badge) badge.textContent = '签到未通过';
+    if (btn) btn.textContent = alertObj.helperToken ? '前往处理' : '查看悬赏';
   } else if (alertObj.eventType === 'sign_success') {
     banner.classList.add('alert-success');
-    if (badge) badge.textContent = '✅ 签到成功';
+    if (badge) badge.textContent = '签到成功';
     if (btn) btn.textContent = '查看签到记录';
   } else {
     banner.classList.add('alert-detected');
-    if (badge) badge.textContent = '🚨 发现课堂签到';
-    if (btn) btn.textContent = alertObj.helperToken ? '⚡ 直达该签到' : '直达查看';
+    if (badge) badge.textContent = '发现签到';
+    if (btn) btn.textContent = alertObj.helperToken ? '前往签到' : '查看详情';
   }
 
   if (titleEl) titleEl.textContent = alertObj.title || `《${alertObj.courseName || '课程'}》${alertObj.activeName || '签到'}`;
@@ -3576,12 +3576,12 @@ async function initHelperMode(token) {
   if (idBanner) {
     if (res.helperPrimaryAccount) {
       const p = res.helperPrimaryAccount;
-      idBanner.innerHTML = `🎖️ <strong>已关联 ISHIT 主账号：${escapeHtml(p.name)}</strong>${p.studentId ? `（学号 ${escapeHtml(p.studentId)}）` : ''} · 帮签成功将按成功人数自动加分登上<strong>签到大师排行榜</strong>！`;
+      idBanner.innerHTML = `当前辅助账号：<strong>${escapeHtml(p.name)}</strong>${p.studentId ? `（${escapeHtml(p.studentId)}）` : ''}，帮签成功自动计分。`;
       if (helperNameInput && (!helperNameInput.value || helperNameInput.value === '热心同学' || helperNameInput.value === '同学')) {
         helperNameInput.value = p.name;
       }
     } else {
-      idBanner.innerHTML = `🏆 <strong>签到大师榜规则</strong>：每成功帮签 1 人计 <strong>+1 分</strong>（失败不计分，重试成功即计分）。未登录用户可在提交成功后<strong>事后填写名称与学号</strong>领分上榜！`;
+      idBanner.innerHTML = `按成功帮签人数计分，提交后可填写名称与学号领分。`;
     }
   }
 
@@ -3617,15 +3617,15 @@ async function initHelperMode(token) {
       document.getElementById('helpSectionCode').style.display = isCode || isPattern ? 'block' : 'none';
       document.getElementById('helpPatternWrap').style.display = isPattern ? 'block' : 'none';
       document.getElementById('helpCodeLabel').textContent = isPattern
-        ? '👆 手势签到（点击下方九宫格连线或直接输入数字序列）'
-        : '🔢 签到码（输入教师公布的数字/字母签到码）';
+        ? '手势签到（点击九宫格或输入数字序列）'
+        : '签到码';
       document.getElementById('helpSectionQr').style.display = isQr ? 'block' : 'none';
       document.getElementById('helpSectionLocation').style.display = isLoc ? 'block' : 'none';
       const locLbl = document.getElementById('helpLocationLabel');
       if (locLbl) {
         locLbl.textContent = place
-          ? `📍 签到位置（教师要求：${place}${range ? ` · ${range}m内` : ''}）`
-          : '📍 签到位置';
+          ? `签到位置（要求：${place}${range ? ` · ${range}m内` : ''}）`
+          : '签到位置';
       }
       const quickBtn = document.getElementById('helpQuickReqLocBtn');
       if (quickBtn) {
@@ -3679,8 +3679,8 @@ function renderHelperTargetStatusStrip(sess) {
 
   strip.innerHTML = `
     <div class="bounty-student-pills">
-      ${pendingNames.map((n) => `<span class="student-pill pending">⏳ 待签: ${escapeHtml(n)}</span>`).join('')}
-      ${succeededNames.map((n) => `<span class="student-pill done">✅ 已签: ${escapeHtml(n)}</span>`).join('')}
+      ${pendingNames.map((n) => `<span class="student-pill pending">待签: ${escapeHtml(n)}</span>`).join('')}
+      ${succeededNames.map((n) => `<span class="student-pill done">已签: ${escapeHtml(n)}</span>`).join('')}
     </div>
   `;
 }
@@ -3690,11 +3690,11 @@ async function submitHelperSign(retryFailedOnly = false) {
   const submitBtn = document.getElementById('helpMainSubmitBtn');
   if (submitBtn) {
     submitBtn.disabled = true;
-    submitBtn.textContent = '⏳ 正在极速提交签到...';
+    submitBtn.textContent = '提交中...';
   }
   const box = document.getElementById('helpResultBox');
   if (box) {
-    box.innerHTML = `<div class="helper-battle-report">⏳ 正在为待签同学提交签到并校验结果，请稍候...</div>`;
+    box.innerHTML = `<div class="helper-battle-report">正在提交签到，请稍候...</div>`;
   }
 
   try {
@@ -3711,7 +3711,7 @@ async function submitHelperSign(retryFailedOnly = false) {
 
     if (!res.ok || !res.record) {
       if (box) {
-        box.innerHTML = `<div class="helper-battle-report report-fail"><strong>❌ 提交失败：</strong>${escapeHtml(res.msg || '请检查签到信息后重试')}</div>`;
+        box.innerHTML = `<div class="helper-battle-report report-fail"><strong>提交失败：</strong>${escapeHtml(res.msg || '请检查签到信息后重试')}</div>`;
       }
       showToast(res.msg || '提交失败');
       return;
@@ -3729,14 +3729,14 @@ async function submitHelperSign(retryFailedOnly = false) {
     const allDone = remainingNames.length === 0 && (okList.length > 0 || (res.allSucceededNames || []).length > 0);
 
     let reportCls = 'helper-battle-report report-fail';
-    let headline = '❌ 本次暂未签上，请核对位置/二维码/手势后立即重试！';
+    let headline = '暂未签上，请核对签到信息后重试';
     if (allDone) {
       reportCls = 'helper-battle-report report-all-ok';
-      headline = `🎉 全部签到成功！（共 ${(res.allSucceededNames || okList).length} 人全部搞定）`;
+      headline = `全部签到成功（共 ${(res.allSucceededNames || okList).length} 人）`;
       playSignAlertSound('sign_success');
     } else if (okList.length > 0) {
       reportCls = 'helper-battle-report report-partial';
-      headline = `⚠️ 部分同学已签上（成功 ${okList.length} 人，仍有 ${remainingNames.length} 人未签上，请点击下方一键重试）`;
+      headline = `部分已签上（成功 ${okList.length} 人，未签 ${remainingNames.length} 人）`;
       playSignAlertSound('sign_detected');
     } else {
       playSignAlertSound('sign_failed');
@@ -3744,7 +3744,7 @@ async function submitHelperSign(retryFailedOnly = false) {
 
     const rowsHtml = results
       .map((r) => {
-        const icon = r.ok ? '✅' : '❌';
+        const icon = r.ok ? '[已签]' : '[未签]';
         const pillCls = r.ok ? 'student-pill done' : 'student-pill pending';
         return `
         <div class="list-row" style="padding:7px 0;">
@@ -3756,7 +3756,7 @@ async function submitHelperSign(retryFailedOnly = false) {
 
     const retryBtnHtml =
       remainingNames.length > 0
-        ? `<button type="button" class="btn helper-giant-btn" style="width:100%; margin-top:10px; background:#dc2626; border-color:#dc2626;" onclick="submitHelperSign(true)">🔄 一键仅重试未签上的同学（${remainingNames.map((n) => escapeHtml(n)).join(' / ')}）</button>`
+        ? `<button type="button" class="btn helper-giant-btn" style="width:100%; margin-top:10px; background:#dc2626; border-color:#dc2626;" onclick="submitHelperSign(true)">重试未签账号（${remainingNames.map((n) => escapeHtml(n)).join(' / ')}）</button>`
         : '';
 
     let pointsCardHtml = '';
@@ -3764,7 +3764,7 @@ async function submitHelperSign(retryFailedOnly = false) {
       if (res.autoCredited && res.creditedEntry) {
         pointsCardHtml = `
         <div class="helper-claim-card" style="background:#f0fdf4; border-color:#86efac;">
-          <div style="font-weight:700; color:#166534;">🏆 签到大师积分 +${res.earnedPoints} 分已自动入账！</div>
+          <div style="font-weight:700; color:#166534;">积分 +${res.earnedPoints} 已自动计入</div>
           <div style="font-size:12px; color:#15803d; margin-top:3px;">
             已归入 <strong>${escapeHtml(res.creditedEntry.displayName)}</strong>（学号：${escapeHtml(res.creditedEntry.studentId)}） · 当前累计总分：<strong>${res.creditedEntry.score} 分</strong>
           </div>
@@ -3773,12 +3773,12 @@ async function submitHelperSign(retryFailedOnly = false) {
         const defaultName = document.getElementById('helpHelperName')?.value.trim() || '';
         pointsCardHtml = `
         <div class="helper-claim-card" id="helperClaimCardBox">
-          <div style="font-weight:700; font-size:13px;">🏆 您本次成功帮签了 +${res.earnedPoints} 人！填写名称与学号即可荣登【签到大师排行榜】：</div>
-          <div style="font-size:11px; color:var(--muted); margin-top:2px;">积分将永久归属该学号，同一个学号可以使用多种不同称号展示</div>
+          <div style="font-weight:700; font-size:13px;">本次成功帮签 +${res.earnedPoints} 人，填写名称与学号可计入排行榜：</div>
+          <div style="font-size:11px; color:var(--muted); margin-top:2px;">积分归属该学号，支持使用不同名称</div>
           <div class="row" style="margin-top:8px; gap:6px; flex-wrap:wrap;">
-            <input id="claimHelperNameInput" value="${escapeHtml(defaultName)}" placeholder="你的名称/大侠称号" style="flex:1; min-width:120px;" />
-            <input id="claimStudentIdInput" placeholder="输入你的学号（必填）" style="flex:1; min-width:130px;" />
-            <button type="button" class="btn btn-sm" onclick="submitHelperPointClaim('${escapeHtml(res.claimToken)}')">🏅 领取 +${res.earnedPoints} 分上榜</button>
+            <input id="claimHelperNameInput" value="${escapeHtml(defaultName)}" placeholder="名称" style="flex:1; min-width:120px;" />
+            <input id="claimStudentIdInput" placeholder="学号（必填）" style="flex:1; min-width:130px;" />
+            <button type="button" class="btn btn-sm" onclick="submitHelperPointClaim('${escapeHtml(res.claimToken)}')">领取 +${res.earnedPoints} 分</button>
           </div>
         </div>`;
       }
@@ -3793,11 +3793,11 @@ async function submitHelperSign(retryFailedOnly = false) {
         ${pointsCardHtml}
       </div>`;
     }
-    showToast(allDone ? '🎉 全部签到成功！' : remainingNames.length > 0 ? `部分未签上（剩余 ${remainingNames.length} 人需重试）` : '提交完成');
+    showToast(allDone ? '全部签到成功' : remainingNames.length > 0 ? `部分未签上（剩余 ${remainingNames.length} 人需重试）` : '提交完成');
   } finally {
     if (submitBtn) {
       submitBtn.disabled = false;
-      submitBtn.textContent = '🚀 立即提交签到';
+      submitBtn.textContent = '提交签到';
     }
   }
 }
@@ -3820,12 +3820,12 @@ async function submitHelperPointClaim(claimToken) {
       card.style.background = '#f0fdf4';
       card.style.borderColor = '#86efac';
       card.innerHTML = `
-        <div style="font-weight:700; color:#166534;">🏅 认领成功！积分已归入签到大师榜</div>
+        <div style="font-weight:700; color:#166534;">积分已计入排行榜</div>
         <div style="font-size:12px; color:#15803d; margin-top:3px;">
           称号：<strong>${escapeHtml(res.entry.displayName)}</strong> · 学号：<strong>${escapeHtml(res.entry.studentId)}</strong> · 累计总分：<strong>${res.entry.score} 分</strong>
         </div>`;
     }
-    showToast(`🏅 认领成功！当前总分 ${res.entry.score} 分`);
+    showToast(`已计入排行榜，当前总分 ${res.entry.score} 分`);
   } else {
     showToast(res.msg || '认领失败');
   }

@@ -1768,7 +1768,7 @@ async function executeSignForActive({
     const okNames = newlySucceededAlertUsers.map((r) => r.name || r.uid);
     pushRealtimeSignAlert({
       eventType: 'sign_success',
-      title: `✅ 签到成功：《${courseName}》`,
+      title: `签到成功：《${courseName}》`,
       body: `${activeName} (${record.signTypeLabel}) · 已签上：${okNames.join(' / ')}`,
       courseId,
       classId,
@@ -1790,7 +1790,7 @@ async function executeSignForActive({
     const failReasons = Array.from(new Set(failedUsers.map((r) => r.msg || '需人工协助'))).slice(0, 2).join('；');
     pushRealtimeSignAlert({
       eventType: 'sign_failed',
-      title: `⚠️ 签到失败/待协助：《${courseName}》`,
+      title: `签到未通过：《${courseName}》`,
       body: `${activeName} (${record.signTypeLabel}) · 未签上：${failNames.join(' / ')}（${failReasons}）`,
       courseId,
       classId,
@@ -2304,8 +2304,8 @@ async function pollCoursesOnce({ forceAll = false, triggerSource = '自动轮询
             });
             pushRealtimeSignAlert({
               eventType: 'sign_detected',
-              title: `🔔 发现新签到：《${course.name}》`,
-              body: `${act.name} · 当前已签 ${stats.signedCount}/${stats.totalCount}，防钓鱼盯盘或点击立即前往签`,
+              title: `发现新签到：《${course.name}》`,
+              body: `${act.name} · 当前已签 ${stats.signedCount}/${stats.totalCount}`,
               courseId: course.courseId,
               classId: course.classId,
               courseName: course.name,
@@ -2981,7 +2981,7 @@ async function checkExternalSignCompletions(options = {}) {
 
         pushRealtimeSignAlert({
           eventType: 'sign_success',
-          title: `✅ 签到成功：《${meta.courseName}》`,
+          title: `签到成功：《${meta.courseName}》`,
           body: `${meta.activeName} (${meta.signTypeLabel}) · 已确认签上：${mergedNames}`,
           courseId: meta.courseId,
           classId: meta.classId,

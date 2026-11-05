@@ -7,7 +7,7 @@
   <link rel="icon" type="image/png" href="favicon.png?v=8" />
   <link rel="shortcut icon" type="image/png" href="favicon.png?v=8" />
   <link rel="stylesheet" href="vendor/leaflet/leaflet.css?v=194" />
-  <link rel="stylesheet" href="style.css?v=12" />
+  <link rel="stylesheet" href="style.css?v=13" />
   <script src="vendor/leaflet/leaflet.js?v=194"></script>
   <script src="jsqr.js?v=9"></script>
 </head>
@@ -32,10 +32,10 @@
   <div class="panel helper-main-panel">
     <div class="panel-head" style="gap:8px; flex-wrap:wrap;">
       <div class="row" style="gap:8px; align-items:center;">
-        <button type="button" class="btn btn-ghost btn-sm" id="helpBackToAdminBtn" style="display:none;" onclick="exitInAppHelperMode()">← 返回悬赏大厅</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="helpBackToAdminBtn" style="display:none;" onclick="exitInAppHelperMode()">返回悬赏榜</button>
         <span class="panel-title" id="helpTitle">协助任务</span>
       </div>
-      <span class="tag solid" id="helpSubtitle">实时互助通道</span>
+      <span class="tag solid" id="helpSubtitle">签到互助</span>
     </div>
 
     <div id="helpSignBox" style="display:none;">
@@ -59,11 +59,11 @@
 
       <!-- 二维码扫码区块（仅 qrCode 显示）：大尺寸核心按钮置顶，扫完立即自动提交 -->
       <div id="helpSectionQr" class="helper-action-section" style="display:none;">
-        <div class="helper-section-title">📷 现场二维码极速识别（识别成功自动提交签到，防二维码刷新失效）</div>
+        <div class="helper-section-title">二维码签到（扫码后自动提交）</div>
         <div class="helper-big-btn-grid">
-          <button type="button" class="btn helper-giant-btn" id="helpCamBtn" onclick="toggleCameraQrScanner('help')">📷 打开相机扫码（自动提交）</button>
+          <button type="button" class="btn helper-giant-btn" id="helpCamBtn" onclick="toggleCameraQrScanner('help')">打开相机扫码</button>
           <label class="btn btn-ghost helper-giant-btn" style="margin:0; cursor:pointer; text-align:center;">
-            🖼️ 拍照 / 相册识码
+            拍照 / 相册识码
             <input type="file" accept="image/*" style="display:none;" onchange="decodeQrImage(this, 'helpQrUrl', true)" />
           </label>
         </div>
@@ -81,7 +81,7 @@
         <div id="helpPatternWrap" style="display:none; margin-top:8px;">
           <div class="pattern-grid" id="helpPatternGrid"></div>
           <div class="row" style="justify-content:center; gap:10px; margin-top:6px;">
-            <button type="button" class="btn btn-ghost btn-sm" onclick="clearPattern('helpSignCode','helpPatternGrid')">🔄 重置手势</button>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="clearPattern('helpSignCode','helpPatternGrid')">重置手势</button>
           </div>
         </div>
       </div>
@@ -89,12 +89,12 @@
       <!-- 位置选点区块（仅需要位置时显示） -->
       <div id="helpSectionLocation" class="helper-action-section" style="display:none;">
         <div class="row" style="justify-content:space-between; align-items:center; margin:6px 0; flex-wrap:wrap; gap:6px;">
-          <label id="helpLocationLabel" style="margin:0; font-weight:600; font-size:13px;">📍 签到位置</label>
+          <label id="helpLocationLabel" style="margin:0; font-weight:600; font-size:13px;">签到位置</label>
         </div>
         <div class="helper-big-btn-grid" style="margin-bottom:8px;">
-          <button type="button" class="btn helper-giant-btn" id="helpQuickReqLocBtn" style="display:none;" onclick="applyRequiredLocationQuick('help')">🎯 一键选用教师要求位置</button>
-          <button type="button" class="btn btn-ghost helper-giant-btn" onclick="openMapPicker('helpAddress','helpLat','helpLng')">🗺️ 地图选点</button>
-          <button type="button" class="btn btn-ghost helper-giant-btn" onclick="fillBrowserGps('helpLat','helpLng','helpAddress')">📡 获取当前GPS</button>
+          <button type="button" class="btn helper-giant-btn" id="helpQuickReqLocBtn" style="display:none;" onclick="applyRequiredLocationQuick('help')">选用要求位置</button>
+          <button type="button" class="btn btn-ghost helper-giant-btn" onclick="openMapPicker('helpAddress','helpLat','helpLng')">地图选点</button>
+          <button type="button" class="btn btn-ghost helper-giant-btn" onclick="fillBrowserGps('helpLat','helpLng','helpAddress')">获取当前定位</button>
         </div>
         <div class="row">
           <input id="helpAddress" placeholder="签到地址名称（选点后自动填入）" style="flex:1;" />
@@ -107,12 +107,12 @@
 
       <div class="row" style="margin-top:10px; gap:8px; align-items:center;">
         <div style="flex:1;">
-          <label style="margin-top:0;">辅助人称号 / 备注（可选，登上大师榜展示）</label>
+          <label style="margin-top:0;">辅助人名称（可选）</label>
           <input id="helpHelperName" value="热心同学" placeholder="输入你的称号或姓名" />
         </div>
       </div>
 
-      <button type="button" class="btn helper-submit-giant-btn" id="helpMainSubmitBtn" onclick="submitHelperSign(false)">🚀 立即提交签到</button>
+      <button type="button" class="btn helper-submit-giant-btn" id="helpMainSubmitBtn" onclick="submitHelperSign(false)">提交签到</button>
       <div id="helpResultBox" style="margin-top:14px;"></div>
     </div>
 
@@ -188,7 +188,7 @@
       <div class="win-nav-group">
         <button type="button" class="win-nav-item" data-main="bounty" onclick="switchMainModule('bounty')">
           <span class="win-nav-dot"></span>
-          <span>签到悬赏与大师榜</span>
+          <span>签到悬赏</span>
           <span id="winBountyBadge" class="bounty-nav-badge" style="display:none;">0</span>
         </button>
       </div>
@@ -237,8 +237,6 @@
         <span id="classStatusBadge" class="status-dot">加载中</span>
       </div>
       <div class="row topbar-actions" style="gap:8px;">
-        <button type="button" class="btn btn-ghost btn-sm win-only-inline" onclick="triggerQuickSign(false)">立即扫描</button>
-        <button type="button" class="btn btn-ghost btn-sm win-only-inline" onclick="refreshStatus(true)">刷新状态</button>
         <span id="currentPanelUserBadge" class="tag win-hide-inline"></span>
         <button class="btn btn-ghost btn-sm win-hide-inline" onclick="doPanelLogout()">退出</button>
         <div class="win-window-controls win-only-flex">
@@ -306,12 +304,12 @@
         <div class="panel-head">
           <div>
             <span class="panel-title">活动监测</span>
-            <div style="font-size:11px; color:var(--muted); margin-top:2px;">与悬赏池实时同步 · 已签/截止自动剔除防重签</div>
+            <div style="font-size:11px; color:var(--muted); margin-top:2px;">展示当前进行中的课堂签到</div>
           </div>
           <div class="row" style="gap:6px;">
-            <button class="btn btn-ghost btn-sm" onclick="forceSyncBountyBoard()">实时同步</button>
-            <button class="btn btn-ghost btn-sm" onclick="switchMainModule('bounty')">悬赏大厅</button>
-            <button class="btn btn-ghost btn-sm" onclick="switchTab('courses')">管理课程</button>
+            <button class="btn btn-ghost btn-sm" onclick="forceSyncBountyBoard()">同步</button>
+            <button class="btn btn-ghost btn-sm" onclick="switchMainModule('bounty')">悬赏</button>
+            <button class="btn btn-ghost btn-sm" onclick="switchTab('courses')">课程</button>
           </div>
         </div>
         <div id="activeRadarList"></div>
@@ -346,17 +344,17 @@
       <div class="row" style="justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
         <div>
           <div class="row" style="gap:8px; align-items:center;">
-            <span class="panel-title">🎯 签到悬赏雷达 & 🏆 签到大师排行榜</span>
-            <span class="tag solid" id="bountySyncStatusTag">⚡ 3.5s 实时高同步</span>
+            <span class="panel-title">签到悬赏</span>
+            <span class="tag solid" id="bountySyncStatusTag">实时同步</span>
           </div>
           <div style="font-size:12px; color:var(--muted); margin-top:3px;">
-            NapCat 掉线全天候兜底 · 优先展示本人及同课程未完成签到 · 学习通端已签或活动截止秒级自动下榜防重签
+            未完成签到互助与通知设置
           </div>
         </div>
         <div class="row" style="gap:8px; flex-wrap:wrap;">
-          <button type="button" class="btn btn-ghost btn-sm" id="notifyPermBtn" onclick="requestCrossPlatformNotificationPermission()">🔔 开启签到通知</button>
-          <button type="button" class="btn btn-ghost btn-sm" onclick="testCrossPlatformNotification()">📢 测试通知</button>
-          <button type="button" class="btn btn-sm" id="forceSyncBountyBtn" onclick="forceSyncBountyBoard()">🔄 立即同步状态</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="notifyPermBtn" onclick="requestCrossPlatformNotificationPermission()">开启通知</button>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="testCrossPlatformNotification()">测试通知</button>
+          <button type="button" class="btn btn-sm" id="forceSyncBountyBtn" onclick="forceSyncBountyBoard()">同步状态</button>
         </div>
       </div>
     </div>
@@ -365,10 +363,10 @@
       <div class="panel">
         <div class="panel-head">
           <div>
-            <span class="panel-title">🔥 实时签到悬赏池</span>
-            <div style="font-size:11px; color:var(--muted); margin-top:2px;">所有人可见可帮签 · 本人待签与同课程签到自动置顶</div>
+            <span class="panel-title">待签悬赏</span>
+            <div style="font-size:11px; color:var(--muted); margin-top:2px;">优先显示本人及同课程未完成签到</div>
           </div>
-          <span class="tag" id="bountyActiveCountTag">0 个悬赏</span>
+          <span class="tag" id="bountyActiveCountTag">0 项</span>
         </div>
         <div id="bountyBoardList"></div>
       </div>
@@ -376,10 +374,10 @@
       <div class="panel">
         <div class="panel-head">
           <div>
-            <span class="panel-title">🏆 签到大师排行榜</span>
-            <div style="font-size:11px; color:var(--muted); margin-top:2px;">每成功帮签 1 人次计 +1 分（失败不计分，重试成功即加分）</div>
+            <span class="panel-title">签到大师榜</span>
+            <div style="font-size:11px; color:var(--muted); margin-top:2px;">按成功帮签人数计分</div>
           </div>
-          <span class="tag" id="leaderboardCountTag">0 位大师</span>
+          <span class="tag" id="leaderboardCountTag">0 人</span>
         </div>
         <div id="masterLeaderboardList"></div>
       </div>
@@ -1125,7 +1123,7 @@
 
 
 
-<script src="app.js?v=20"></script>
+<script src="app.js?v=21"></script>
 </body>
 </html>
 

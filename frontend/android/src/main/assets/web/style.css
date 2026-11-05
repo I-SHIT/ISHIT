@@ -1196,36 +1196,80 @@ html.platform-android .app-main-viewport {
 }
 
 html.platform-android .topbar {
-  height: 54px;
-  padding: 0 14px;
+  min-height: calc(52px + env(safe-area-inset-top, 0px));
+  height: auto;
+  padding: calc(6px + env(safe-area-inset-top, 0px)) 12px 6px;
   margin-bottom: 0;
   background: #ffffff;
   border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   flex-wrap: nowrap;
+  gap: 6px;
   flex-shrink: 0;
 }
 
 html.platform-android .title-group {
-  gap: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
   min-width: 0;
+  overflow: hidden;
+  flex-wrap: nowrap;
 }
 
 html.platform-android .app-round-icon {
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
 }
 
 html.platform-android .brand-logo {
-  height: 22px;
+  height: 20px;
+  flex-shrink: 0;
 }
 
 html.platform-android .status-dot {
   font-size: 11px;
-  padding: 2px 8px;
+  padding: 2px 7px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 145px;
+  max-width: 118px;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+html.platform-android .topbar-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap !important;
+  flex-shrink: 0;
+  gap: 6px !important;
+  white-space: nowrap;
+}
+
+html.platform-android #currentPanelUserBadge {
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  padding: 2px 7px;
+}
+
+html.platform-android .topbar-actions .btn-sm {
+  min-height: 28px;
+  padding: 3px 9px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+html.platform-android .panel-head {
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 html.platform-android .nav-bar {
@@ -1236,7 +1280,7 @@ html.platform-android .app-content-scroll {
   flex: 1;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding: 12px 12px 84px;
+  padding: 12px 12px calc(24px + env(safe-area-inset-bottom, 0px));
 }
 
 html.platform-android .grid-2 {
@@ -1318,17 +1362,22 @@ html.platform-android textarea {
 
 html.platform-android .android-bottom-nav {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  height: 62px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  min-height: calc(58px + env(safe-area-inset-bottom, 0px));
+  height: auto;
+  padding: 6px 4px calc(6px + env(safe-area-inset-bottom, 0px));
   background: #ffffff;
   border-top: 1px solid var(--border);
-  padding-bottom: env(safe-area-inset-bottom, 0px);
   flex-shrink: 0;
   z-index: 90;
   box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.04);
 }
 
 html.platform-android .android-tab-item {
+  position: relative;
+  min-width: 0;
+  white-space: nowrap;
+  padding: 2px 2px;
   border: none;
   background: transparent;
   color: var(--muted);

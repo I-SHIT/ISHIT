@@ -122,11 +122,12 @@ function ensurePanelAuthStore() {
   return store.panelAuth;
 }
 
-function getValidPanelSession(req) {
+function getValidPanelSession(req, parsedUrl = null) {
   const pa = ensurePanelAuthStore();
   if (pa.enabled === false) return { username: pa.username || 'ishit', role: 'admin', bypass: true };
   const cookies = parseReqCookies(req);
-  const token = req.headers['x-panel-token'] || cookies.ishit_panel_session || '';
+  const queryToken = parsedUrl && parsedUrl.searchParams ? (parsedUrl.searchParams.get('token') || '') : '';
+  const token = req.headers['x-panel-token'] || queryToken || cookies.ishit_panel_session || '';
   if (!token) return null;
   const sess = pa.sessions[token];
   if (!sess) return null;
@@ -513,7 +514,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     // 统一 API 访问拦截：除合法协助链接接口外，所有后台 API 均须携带已登录会话
-    const currentSess = getValidPanelSession(req);
+    const currentSess = getValidPanelSession(req, parsedUrl);
     if (pathname.startsWith('/api/')) {
       if (!currentSess && !isHelperAuthorizedRoute(req, pathname, parsedUrl)) {
         return sendJson(res, { ok: false, needAuth: true, msg: '请先登录 ISHIT' }, 401);
@@ -920,6 +921,75 @@ const server = http.createServer(async (req, res) => {
         pendingCaptchas: visibleCaptchas,
         history: visibleHistory,
         logs: visibleLogs,
+      });
+    }
+
+    // 1.5 原生后台守护专属极轻量告警心跳接口（省电、低流量、息屏秒推）
+    if (pathname === '/api/alerts/poll' && req.method === 'GET') {
+      const pa = ensurePanelAuthStore();
+      const isAdmin = !currentSess || currentSess.role === 'admin';
+      const currentUsername = currentSess ? currentSess.username : (pa.username || 'ishit');
+      const myOwnedAccounts = (store.accounts || []).filter((a) => a && a.ownerUsername === currentUsername);
+      const myOwnedUids = myOwnedAccounts.map((a) => String(a.uid));
+      const myOwnedNames = myOwnedAccounts.map((a) => String(a.name || '')).filter(Boolean);
+      const myCourseNames = new Set();
+      const myCourseIds = new Set();
+      const myClassIds = new Set();
+      for (const acc of myOwnedAccounts) {
+        const eff = getEffectiveUserProfile(acc.uid);
+        for (const c of eff?.coursesCache || []) {
+          const cn = c.name || c.courseName;
+          if (cn) myCourseNames.add(String(cn));
+          if (c.courseId) myCourseIds.add(String(c.courseId));
+          if (c.classId) myClassIds.add(String(c.classId));
+        }
+      }
+
+      syncActiveBountiesNow({ force: false }).catch(() => {});
+
+      const sinceMs = Math.max(0, Number(parsedUrl.searchParams.get('since') || 0));
+      const nowMs = Date.now();
+      const visibleAlerts = (store.recentAlerts || [])
+        .filter((al) => {
+          if (!al) return false;
+          const t = Number(al.timeMs || 0);
+          if (nowMs - t > 25 * 60 * 1000) return false;
+          if (sinceMs > 0 && t < sinceMs) return false;
+          if (isAdmin) return true;
+          const hitUid = (al.targetUids || []).some((u) => myOwnedUids.includes(String(u)));
+          const hitName = (al.targetNames || []).some((n) => myOwnedNames.includes(String(n)));
+          if (al.eventType === 'sign_success' || al.eventType === 'sign_failed') {
+            return hitUid || hitName;
+          }
+          const hitCourse =
+            (al.classId && myClassIds.has(String(al.classId))) ||
+            (al.courseId && myCourseIds.has(String(al.courseId))) ||
+            (al.courseName && myCourseNames.has(String(al.courseName)));
+          return hitUid || hitName || hitCourse;
+        })
+        .slice(0, 15);
+
+      const activeBounties = getActiveBountiesForUser({
+        myCourseIds,
+        myClassIds,
+        myCourseNames,
+        myOwnedUids,
+      });
+
+      const engine = getEngineState();
+      const userInClass = isAdmin
+        ? Boolean(engine.inClass)
+        : myOwnedUids.some((u) => Boolean(engine.perAccountStatus?.[u]?.inClass));
+
+      return sendJson(res, {
+        ok: true,
+        serverTimeMs: nowMs,
+        username: currentUsername,
+        inClass: userInClass,
+        forcePolling: Boolean(store.schedule?.forcePolling),
+        effectiveIntervalSeconds: getEffectiveTimerIntervalSeconds(),
+        activeBountyCount: activeBounties.length,
+        alerts: visibleAlerts,
       });
     }
 
@@ -2100,7 +2170,7 @@ const server = http.createServer(async (req, res) => {
       const patch = {};
       if (body.masterEnabled !== undefined) patch.masterEnabled = Boolean(body.masterEnabled);
       if (body.forcePolling !== undefined) patch.forcePolling = Boolean(body.forcePolling);
-      if (body.intervalSeconds !== undefined) patch.intervalSeconds = Math.max(5, Math.min(300, Number(body.intervalSeconds || 25)));
+      if (body.intervalSeconds !== undefined) patch.intervalSeconds = Math.max(3, Math.min(300, Number(body.intervalSeconds || 15)));
       if (body.signThresholdEnabled !== undefined) patch.signThresholdEnabled = Boolean(body.signThresholdEnabled);
       if (body.signThresholdRatio !== undefined) patch.signThresholdRatio = Math.max(0.01, Math.min(0.99, Number(body.signThresholdRatio || 0.3)));
 
@@ -2197,7 +2267,7 @@ const server = http.createServer(async (req, res) => {
       if (pathname === '/api/admin/bounty/config' && req.method === 'POST') {
         const body = await readBodyJson(req);
         if (body.intervalSeconds !== undefined) {
-          const sec = Math.max(5, Math.min(300, Number(body.intervalSeconds || 25)));
+          const sec = Math.max(3, Math.min(300, Number(body.intervalSeconds || 15)));
           store.schedule = { ...(store.schedule || {}), intervalSeconds: sec };
           if (body.syncAllUsers !== false) {
             store.userScheduleConfigs = store.userScheduleConfigs || {};

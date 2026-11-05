@@ -2354,7 +2354,8 @@ async function pollCoursesOnce({ forceAll = false, triggerSource = '自动轮询
 
     for (let idx = 0; idx < enabledEntries.length; idx++) {
       if (idx > 0) {
-        await sleepMs(1100);
+        const interClassDelay = enabledEntries.length <= 3 ? 250 : (enabledEntries.length <= 6 ? 450 : 750);
+        await sleepMs(interClassDelay);
       }
       const entry = enabledEntries[idx];
       const course = entry.course;
@@ -3536,8 +3537,8 @@ function getEffectiveTimerIntervalSeconds() {
       candidates.push(Number(cfg.intervalSeconds));
     }
   }
-  const valid = candidates.filter((n) => !Number.isNaN(n) && n >= 5);
-  return valid.length > 0 ? Math.max(5, Math.min(...valid)) : 25;
+  const valid = candidates.filter((n) => !Number.isNaN(n) && n >= 3);
+  return valid.length > 0 ? Math.max(3, Math.min(...valid)) : 15;
 }
 
 function restartScheduler(triggerImmediate = true) {

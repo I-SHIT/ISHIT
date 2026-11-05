@@ -10,11 +10,15 @@ import android.app.PendingIntent;
 import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.PowerManager;
+import android.provider.Settings;
+import org.json.JSONObject;
 import android.view.View;
 import android.view.Window;
 import android.webkit.CookieManager;
@@ -35,6 +39,8 @@ public class MainActivity extends Activity {
     public static final int FILE_CHOOSER_REQ_CODE = 1001;
     public static final int RUNTIME_PERM_REQ_CODE = 1002;
     public static final String NOTIFY_CHANNEL_ID = "ishit_sign_channel";
+    public static final String PREFS_NAME = "ishit_native_prefs";
+    private static int sNotifySeq = 2000;
     public static final String LOCAL_ASSET_INDEX = "file:///android_asset/web/index.html";
     public static final String DEFAULT_CONFIG_JSON = "{\n  \"serverHost\": \"47.117.27.75\",\n  \"serverPort\": 80,\n  \"apiBaseUrl\": \"http://47.117.27.75\",\n  \"httpsApiBaseUrl\": \"https://appraisal-occurring-performance-phrase.trycloudflare.com\",\n  \"directIpUrl\": \"http://47.117.27.75\"\n}";
 
@@ -54,9 +60,11 @@ public class MainActivity extends Activity {
             window.getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
         }
 
-        ensureNotificationChannel();
+        ensureNotificationChannelStatic(this);
         loadOrCreateExternalConfigJson();
         requestNecessaryPermissions();
+        startKeepAliveServiceSafe();
+        promptBatteryOptimizationOnceIfNeeded();
 
         Intent startIntent = getIntent();
         if (startIntent != null) {
@@ -100,6 +108,115 @@ public class MainActivity extends Activity {
         setContentView(root);
 
         webView.loadUrl(LOCAL_ASSET_INDEX);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        startKeepAliveServiceSafe();
+    }
+
+    public void startKeepAliveServiceSafe() {
+        try {
+            Intent svc = new Intent(this, KeepAlivePollService.class);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(svc);
+            } else {
+                startService(svc);
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    public void syncNativeAuthState(String token, String apiBaseUrl, String username) {
+        try {
+            SharedPreferences prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+            SharedPreferences.Editor ed = prefs.edit();
+            ed.putString("panel_token", token != null ? token.trim() : "");
+            if (apiBaseUrl != null && !apiBaseUrl.trim().isEmpty()) {
+                ed.putString("api_base_url", apiBaseUrl.trim());
+            }
+            if (username != null) {
+                ed.putString("panel_username", username.trim());
+            }
+            ed.apply();
+            startKeepAliveServiceSafe();
+        } catch (Exception ignored) {
+        }
+    }
+
+    public boolean isBatteryOptimizationIgnored() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+                return pm != null && pm.isIgnoringBatteryOptimizations(getPackageName());
+            } catch (Exception ignored) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void promptBatteryOptimizationOnceIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                SharedPreferences prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+                if (prefs.getBoolean("battery_opt_prompted", false)) {
+                    return;
+                }
+                if (!isBatteryOptimizationIgnored()) {
+                    prefs.edit().putBoolean("battery_opt_prompted", true).apply();
+                    requestIgnoreBatteryOptimizationExplicit();
+                }
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    @SuppressLint("BatteryLife")
+    public void requestIgnoreBatteryOptimizationExplicit() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                if (!isBatteryOptimizationIgnored()) {
+                    Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                    intent.setData(Uri.parse("package:" + getPackageName()));
+                    startActivity(intent);
+                    return;
+                }
+            } catch (Exception ignored) {
+            }
+            try {
+                Intent fallback = new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS);
+                startActivity(fallback);
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    public static synchronized boolean hasAlertBeenSeenStatic(Context ctx, String alertId) {
+        if (ctx == null || alertId == null || alertId.isEmpty()) return false;
+        SharedPreferences prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        String raw = prefs.getString("seen_alert_ids", "");
+        if (raw == null || raw.isEmpty()) return false;
+        String token = "|" + alertId + "|";
+        return raw.contains(token);
+    }
+
+    public static synchronized void markAlertSeenStatic(Context ctx, String alertId) {
+        if (ctx == null || alertId == null || alertId.isEmpty()) return;
+        SharedPreferences prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        String raw = prefs.getString("seen_alert_ids", "");
+        if (raw == null) raw = "";
+        String token = "|" + alertId + "|";
+        if (raw.contains(token)) return;
+        String updated = raw.isEmpty() ? token : (raw + alertId + "|");
+        if (updated.length() > 6000) {
+            int cut = updated.indexOf("|", updated.length() - 4500);
+            if (cut >= 0) {
+                updated = updated.substring(cut);
+            }
+        }
+        prefs.edit().putString("seen_alert_ids", updated).apply();
     }
 
     @Override
@@ -147,10 +264,11 @@ public class MainActivity extends Activity {
         return sb.toString();
     }
 
-    private void ensureNotificationChannel() {
+    public static void ensureNotificationChannelStatic(Context ctx) {
+        if (ctx == null) return;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             try {
-                NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
                 if (nm != null) {
                     NotificationChannel ch = new NotificationChannel(
                         NOTIFY_CHANNEL_ID,
@@ -159,6 +277,7 @@ public class MainActivity extends Activity {
                     );
                     ch.setDescription("发现课堂签到、签到成功或签到失败时立即提醒并直达");
                     ch.enableVibration(true);
+                    ch.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
                     nm.createNotificationChannel(ch);
                 }
             } catch (Exception ignored) {
@@ -166,39 +285,76 @@ public class MainActivity extends Activity {
         }
     }
 
-    public void postNativeNotification(String title, String body, String payloadJson) {
+    public static void postAlertNotificationStatic(Context ctx, String title, String body, String payloadJson, String alertId) {
+        if (ctx == null) return;
         try {
-            ensureNotificationChannel();
-            NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            ensureNotificationChannelStatic(ctx);
+            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm == null) return;
 
-            int id = ++notifySeq;
-            Intent clickIntent = new Intent(this, MainActivity.class);
-            clickIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            int id;
+            if (alertId != null && !alertId.isEmpty()) {
+                id = 3000 + (Math.abs(alertId.hashCode()) % 60000);
+            } else {
+                id = ++sNotifySeq;
+            }
+
+            Intent clickIntent = new Intent(ctx, MainActivity.class);
+            clickIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
             clickIntent.putExtra("notify_payload", payloadJson != null ? payloadJson : "");
 
             int flags = PendingIntent.FLAG_UPDATE_CURRENT;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 flags |= PendingIntent.FLAG_IMMUTABLE;
             }
-            PendingIntent pi = PendingIntent.getActivity(this, id, clickIntent, flags);
+            PendingIntent pi = PendingIntent.getActivity(ctx, id, clickIntent, flags);
 
             Notification.Builder builder;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                builder = new Notification.Builder(this, NOTIFY_CHANNEL_ID);
+                builder = new Notification.Builder(ctx, NOTIFY_CHANNEL_ID);
             } else {
-                builder = new Notification.Builder(this);
-                builder.setPriority(Notification.PRIORITY_HIGH);
+                builder = new Notification.Builder(ctx);
+                builder.setPriority(Notification.PRIORITY_MAX);
                 builder.setDefaults(Notification.DEFAULT_ALL);
             }
 
+            String safeTitle = (title != null && !title.isEmpty()) ? title : "ISHIT 签到提醒";
+            String safeBody = (body != null && !body.isEmpty()) ? body : "点击直达签到或悬赏大厅";
+
             builder.setSmallIcon(R.drawable.ic_launcher)
-                .setContentTitle(title != null && !title.isEmpty() ? title : "ISHIT 签到提醒")
-                .setContentText(body != null && !body.isEmpty() ? body : "点击直达签到或悬赏大厅")
+                .setContentTitle(safeTitle)
+                .setContentText(safeBody)
+                .setStyle(new Notification.BigTextStyle().bigText(safeBody))
                 .setAutoCancel(true)
                 .setContentIntent(pi);
 
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                builder.setCategory(Notification.CATEGORY_ALARM);
+                builder.setVisibility(Notification.VISIBILITY_PUBLIC);
+            }
+
             nm.notify(id, builder.build());
+        } catch (Exception ignored) {
+        }
+    }
+
+    public void postNativeNotification(String title, String body, String payloadJson) {
+        try {
+            String alertId = "";
+            if (payloadJson != null && !payloadJson.isEmpty()) {
+                try {
+                    JSONObject obj = new JSONObject(payloadJson);
+                    alertId = obj.optString("alertId", "");
+                } catch (Exception ignored) {
+                }
+            }
+            if (alertId != null && !alertId.isEmpty()) {
+                if (hasAlertBeenSeenStatic(this, alertId)) {
+                    return;
+                }
+                markAlertSeenStatic(this, alertId);
+            }
+            postAlertNotificationStatic(this, title, body, payloadJson, alertId);
         } catch (Exception ignored) {
         }
     }
@@ -209,6 +365,7 @@ public class MainActivity extends Activity {
                 requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, RUNTIME_PERM_REQ_CODE);
             }
         }
+        startKeepAliveServiceSafe();
     }
 
     public String loadOrCreateExternalConfigJson() {

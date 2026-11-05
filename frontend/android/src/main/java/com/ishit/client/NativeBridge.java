@@ -35,6 +35,21 @@ public class NativeBridge {
     }
 
     @JavascriptInterface
+    public void syncAuthState(String token, String apiBaseUrl, String username) {
+        act.syncNativeAuthState(token, apiBaseUrl, username);
+    }
+
+    @JavascriptInterface
+    public boolean isIgnoringBatteryOptimizations() {
+        return act.isBatteryOptimizationIgnored();
+    }
+
+    @JavascriptInterface
+    public void requestIgnoreBatteryOptimizations() {
+        act.requestIgnoreBatteryOptimizationExplicit();
+    }
+
+    @JavascriptInterface
     public void onBackEvalResult(String val) {
         act.runOnUiThread(new BackResultRunnable(act, val));
     }

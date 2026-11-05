@@ -602,10 +602,10 @@
           <div class="list-row">
             <div>
               <div style="font-weight:500;">扫描间隔（秒）</div>
-              <div style="font-size:11px; color:var(--muted);">支持 5~300 秒（建议 10~15 秒兼顾响应速度与超星防频控）</div>
+              <div style="font-size:11px; color:var(--muted);">支持 3~300 秒（建议 5~10 秒兼顾极速响应与超星防频控）</div>
             </div>
             <div class="row" style="gap:6px;">
-              <input type="number" id="cfgIntervalSeconds" min="5" max="300" value="15" style="width:90px; padding:4px 8px;" />
+              <input type="number" id="cfgIntervalSeconds" min="3" max="300" value="6" style="width:90px; padding:4px 8px;" />
               <button type="button" class="btn btn-ghost btn-sm" onclick="saveGlobalIntervalConfig()">保存间隔</button>
             </div>
           </div>
@@ -805,9 +805,9 @@
             <div class="list-row">
               <div style="padding-right:10px;">
                 <div style="font-weight:500;">课程签到检测轮询间隔（秒）</div>
-                <div style="font-size:11px; color:var(--muted);">决定发出签到后多久被扫描进悬赏榜（支持 5~300 秒，推荐 8~15 秒；勾选下方同步可一键覆盖所有子用户旧间隔）</div>
+                <div style="font-size:11px; color:var(--muted);">决定发出签到后多久被扫描进悬赏榜（支持 3~300 秒，推荐 5~8 秒；勾选下方同步可一键覆盖所有子用户旧间隔）</div>
               </div>
-              <input type="number" id="adminBountyPollIntervalInput" min="5" max="300" value="15" style="width:90px; padding:4px 8px;" />
+              <input type="number" id="adminBountyPollIntervalInput" min="3" max="300" value="6" style="width:90px; padding:4px 8px;" />
             </div>
 
             <div class="list-row">

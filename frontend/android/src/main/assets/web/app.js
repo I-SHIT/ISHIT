@@ -600,11 +600,23 @@ function showPanelLoginScreen() {
   document.getElementById('panelLoginApp').style.display = '';
 }
 
+function syncAndroidNativeDaemonState(usernameOverride = '') {
+  if (window.IshitAndroidBridge && typeof window.IshitAndroidBridge.syncAuthState === 'function') {
+    try {
+      const tk = localStorage.getItem('ishit_panel_token') || '';
+      const base = getApiBaseUrl() || 'http://47.117.27.75';
+      const uname = usernameOverride || state.panelUsername || state.status?.panelAuth?.username || '';
+      window.IshitAndroidBridge.syncAuthState(String(tk), String(base), String(uname));
+    } catch (_) {}
+  }
+}
+
 function enterAdminPanel() {
   applyPlatformLayoutClass();
   document.getElementById('panelLoginApp').style.display = 'none';
   document.getElementById('helperApp').style.display = 'none';
   document.getElementById('adminApp').style.display = '';
+  syncAndroidNativeDaemonState();
   refreshStatus(true);
   scheduleAdaptiveStatusPolling(3500);
   updateNotifyPermButtonText();
@@ -646,6 +658,7 @@ async function submitPanelLogin() {
 async function doPanelLogout() {
   await api('/api/auth/logout', 'POST', {});
   localStorage.removeItem('ishit_panel_token');
+  syncAndroidNativeDaemonState('');
   showToast('已退出登录');
   showPanelLoginScreen();
 }
@@ -785,6 +798,7 @@ async function savePanelAuthCredentials() {
   });
   if (res.ok) {
     if (res.token) localStorage.setItem('ishit_panel_token', res.token);
+    syncAndroidNativeDaemonState(newUsername);
     document.getElementById('secCurrentPassword').value = '';
     document.getElementById('secNewPassword').value = '';
     showToast(res.msg || '账号密码已更新');
@@ -839,6 +853,7 @@ async function refreshStatus(syncInputs = false) {
     state.status = data;
     if (!state.selectedUid && data.selectedUid) state.selectedUid = data.selectedUid;
     state.courses = data.courses || [];
+    syncAndroidNativeDaemonState(data.panelAuth?.username || '');
 
     renderTopStatus(data);
     renderUserSwitcher(data);
@@ -1104,7 +1119,7 @@ async function quickSaveScheduleToggle(explicitChecked) {
 }
 
 async function saveGlobalIntervalConfig() {
-  const intervalSeconds = Math.max(5, Math.min(300, Number(document.getElementById('cfgIntervalSeconds')?.value || 15)));
+  const intervalSeconds = Math.max(3, Math.min(300, Number(document.getElementById('cfgIntervalSeconds')?.value || 6)));
   const inp = document.getElementById('cfgIntervalSeconds');
   if (inp) inp.value = intervalSeconds;
   const res = await api('/api/schedule', 'POST', { uid: state.selectedUid, intervalSeconds });
@@ -3775,7 +3790,17 @@ function updateNotifyPermButtonText() {
   const btn = document.getElementById('notifyPermBtn');
   if (!btn) return;
   const plat = detectPlatformType();
-  if (plat === 'windows' || plat === 'android') {
+  if (plat === 'android') {
+    let batteryExempt = true;
+    if (window.IshitAndroidBridge && typeof window.IshitAndroidBridge.isIgnoringBatteryOptimizations === 'function') {
+      try {
+        batteryExempt = Boolean(window.IshitAndroidBridge.isIgnoringBatteryOptimizations());
+      } catch (_) {}
+    }
+    btn.textContent = batteryExempt ? '后台常驻已开启' : '开启后台保活通知';
+    return;
+  }
+  if (plat === 'windows') {
     btn.textContent = '通知已开启';
     return;
   }
@@ -3794,9 +3819,25 @@ function updateNotifyPermButtonText() {
 
 async function requestCrossPlatformNotificationPermission() {
   const plat = detectPlatformType();
-  if (plat === 'android' && window.IshitAndroidBridge && typeof window.IshitAndroidBridge.requestNotifyPermission === 'function') {
-    window.IshitAndroidBridge.requestNotifyPermission();
-    showToast('已请求 Android 通知权限');
+  if (plat === 'android' && window.IshitAndroidBridge) {
+    try {
+      if (typeof window.IshitAndroidBridge.requestNotifyPermission === 'function') {
+        window.IshitAndroidBridge.requestNotifyPermission();
+      }
+      syncAndroidNativeDaemonState();
+      if (
+        typeof window.IshitAndroidBridge.isIgnoringBatteryOptimizations === 'function' &&
+        !window.IshitAndroidBridge.isIgnoringBatteryOptimizations() &&
+        typeof window.IshitAndroidBridge.requestIgnoreBatteryOptimizations === 'function'
+      ) {
+        window.IshitAndroidBridge.requestIgnoreBatteryOptimizations();
+        showToast('请允许“忽略电池优化/无限制后台”，确保锁屏与划掉卡片后仍能秒推');
+      } else {
+        showToast('Android 后台常驻签到守护已激活');
+        testCrossPlatformNotification();
+      }
+      setTimeout(updateNotifyPermButtonText, 1200);
+    } catch (_) {}
     return;
   }
   if ('Notification' in window && Notification.permission !== 'granted') {
@@ -3872,6 +3913,7 @@ function dispatchCrossPlatformSignAlert(alertObj) {
   const title = alertObj.title || 'ISHIT 签到提醒';
   const body = alertObj.body || `《${alertObj.courseName || '课程'}》${alertObj.activeName || '签到'}`;
   const payloadJson = JSON.stringify({
+    alertId: String(alertObj.id || ''),
     eventType: alertObj.eventType || 'sign_detected',
     helperToken: alertObj.helperToken || '',
     activeId: alertObj.activeId || '',
@@ -5193,7 +5235,7 @@ function renderAdminBountyRecordsList() {
 }
 
 async function saveAdminBountyPollingConfig() {
-  const intervalSeconds = Math.max(5, Math.min(300, Number(document.getElementById('adminBountyPollIntervalInput')?.value || 15)));
+  const intervalSeconds = Math.max(3, Math.min(300, Number(document.getElementById('adminBountyPollIntervalInput')?.value || 6)));
   const bountySyncSeconds = Math.max(1, Math.min(60, Number(document.getElementById('adminBountySyncIntervalInput')?.value || 3.5)));
   const syncAllUsers = Boolean(document.getElementById('adminBountySyncAllUsersToggle')?.checked);
 

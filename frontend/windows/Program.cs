@@ -30,6 +30,7 @@ namespace ISHIT.Desktop
         private NotifyIcon _trayIcon = null!;
         private bool _isCustomMaximized = false;
         private Rectangle _restoreBounds;
+        private string _lastNotifyPayload = "";
 
         [DllImport("user32.dll")]
         private static extern bool ReleaseCapture();
@@ -251,6 +252,79 @@ namespace ISHIT.Desktop
             catch { }
         }
 
+
+        private static string ExtractJsonStringField(string json, string key)
+        {
+            if (string.IsNullOrEmpty(json) || string.IsNullOrEmpty(key)) return "";
+            string token = "\"" + key + "\"";
+            int kIdx = json.IndexOf(token, StringComparison.Ordinal);
+            if (kIdx < 0) return "";
+            int colonIdx = json.IndexOf(':', kIdx + token.Length);
+            if (colonIdx < 0) return "";
+            int i = colonIdx + 1;
+            while (i < json.Length && char.IsWhiteSpace(json[i])) i++;
+            if (i >= json.Length || json[i] != '"') return "";
+            i++;
+            var sb = new StringBuilder();
+            while (i < json.Length)
+            {
+                char c = json[i++];
+                if (c == '\\' && i < json.Length)
+                {
+                    char esc = json[i++];
+                    switch (esc)
+                    {
+                        case '"': sb.Append('"'); break;
+                        case '\\': sb.Append('\\'); break;
+                        case '/': sb.Append('/'); break;
+                        case 'b': sb.Append('\b'); break;
+                        case 'f': sb.Append('\f'); break;
+                        case 'n': sb.Append('\n'); break;
+                        case 'r': sb.Append('\r'); break;
+                        case 't': sb.Append('\t'); break;
+                        case 'u':
+                            if (i + 4 <= json.Length && int.TryParse(json.Substring(i, 4), System.Globalization.NumberStyles.HexNumber, null, out int hex))
+                            {
+                                sb.Append((char)hex);
+                                i += 4;
+                            }
+                            break;
+                        default: sb.Append(esc); break;
+                    }
+                }
+                else if (c == '"')
+                {
+                    break;
+                }
+                else
+                {
+                    sb.Append(c);
+                }
+            }
+            return sb.ToString();
+        }
+
+        private static string ToJsStringLiteral(string s)
+        {
+            if (s == null) return "\"\"";
+            var sb = new StringBuilder(s.Length + 8);
+            sb.Append('"');
+            foreach (char c in s)
+            {
+                switch (c)
+                {
+                    case '\\': sb.Append("\\\\"); break;
+                    case '"': sb.Append("\\\""); break;
+                    case '\r': sb.Append("\\r"); break;
+                    case '\n': sb.Append("\\n"); break;
+                    case '\t': sb.Append("\\t"); break;
+                    default: sb.Append(c); break;
+                }
+            }
+            sb.Append('"');
+            return sb.ToString();
+        }
+
         private void HandleWebWindowMessage(string msg)
         {
             if (string.IsNullOrWhiteSpace(msg)) return;
@@ -292,6 +366,27 @@ namespace ISHIT.Desktop
             if (cmd == "win:close")
             {
                 this.Close();
+                return;
+            }
+            if (cmd.StartsWith("win:notify:"))
+            {
+                try
+                {
+                    string raw = cmd.Substring("win:notify:".Length);
+                    string title = ExtractJsonStringField(raw, "title");
+                    string body = ExtractJsonStringField(raw, "body");
+                    string payload = ExtractJsonStringField(raw, "payload");
+                    if (string.IsNullOrWhiteSpace(title)) title = "ISHIT 签到通知";
+                    if (string.IsNullOrWhiteSpace(body)) body = "点击查看最新课堂签到动态";
+                    _lastNotifyPayload = payload ?? "";
+                    ToolTipIcon iconType = ToolTipIcon.Info;
+                    if (_lastNotifyPayload.Contains("sign_failed")) iconType = ToolTipIcon.Warning;
+                    if (_trayIcon != null)
+                    {
+                        _trayIcon.ShowBalloonTip(6000, title, body, iconType);
+                    }
+                }
+                catch { }
                 return;
             }
             if (cmd.StartsWith("win:resize:"))
@@ -339,6 +434,15 @@ namespace ISHIT.Desktop
                 Visible = true
             };
             _trayIcon.DoubleClick += (_, _) => ShowMainWindow();
+            _trayIcon.BalloonTipClicked += (_, _) =>
+            {
+                ShowMainWindow();
+                if (!string.IsNullOrEmpty(_lastNotifyPayload) && _webView?.CoreWebView2 != null)
+                {
+                    string jsArg = ToJsStringLiteral(_lastNotifyPayload);
+                    _webView.CoreWebView2.ExecuteScriptAsync("if(window.onNativeNotificationClick)window.onNativeNotificationClick(" + jsArg + ");");
+                }
+            };
         }
 
         private void ShowMainWindow()

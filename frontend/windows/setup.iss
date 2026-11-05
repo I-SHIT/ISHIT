@@ -1,7 +1,7 @@
 [Setup]
 AppId={{8E9D5C31-7A2F-4B18-9F60-4B15A8E9D210}
 AppName=ISHIT
-AppVersion=beta
+AppVersion=0.1
 AppPublisher=ISHIT
 DefaultDirName={autopf}\ISHIT
 DefaultGroupName=ISHIT

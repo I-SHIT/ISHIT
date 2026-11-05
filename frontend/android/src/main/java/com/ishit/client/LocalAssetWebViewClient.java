@@ -101,5 +101,6 @@ public class LocalAssetWebViewClient extends WebViewClient {
             "if(typeof applyPlatformLayoutClass === 'function') applyPlatformLayoutClass();",
             null
         );
+        act.flushPendingNotifyPayload();
     }
 }

@@ -1490,3 +1490,336 @@ html.platform-windows .win-resize-bottomright {
   height: 12px;
   cursor: nwse-resize;
 }
+
+
+/* ==================== 签到悬赏大厅 & 签到大师榜 & 实时三态通知 & 互助大按钮 ==================== */
+.bounty-nav-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #dc2626;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  margin-left: 6px;
+}
+
+.bounty-nav-badge.android-badge {
+  position: absolute;
+  top: 4px;
+  right: 18%;
+  margin-left: 0;
+  min-width: 16px;
+  height: 16px;
+  font-size: 10px;
+}
+
+.live-sign-alert {
+  position: fixed;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(640px, calc(100vw - 24px));
+  background: var(--surface);
+  border: 2px solid var(--text);
+  border-radius: 12px;
+  padding: 12px 14px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
+  z-index: 9998;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  animation: alertSlideIn 0.22s ease-out;
+}
+
+.live-sign-alert.alert-failed {
+  border-color: #dc2626;
+  background: #fff5f5;
+}
+
+.live-sign-alert.alert-success {
+  border-color: #16a34a;
+  background: #f0fdf4;
+}
+
+.live-sign-alert.alert-detected {
+  border-color: #d97706;
+  background: #fffbeb;
+}
+
+@keyframes alertSlideIn {
+  from { opacity: 0; transform: translate(-50%, -14px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+.live-sign-alert-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.live-sign-alert-badge {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  background: var(--text);
+  color: var(--surface);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.live-sign-alert.alert-failed .live-sign-alert-badge { background: #dc2626; color: #fff; }
+.live-sign-alert.alert-success .live-sign-alert-badge { background: #16a34a; color: #fff; }
+.live-sign-alert.alert-detected .live-sign-alert-badge { background: #d97706; color: #fff; }
+
+.live-sign-alert-texts {
+  min-width: 0;
+  flex: 1;
+}
+
+.live-sign-alert-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.35;
+}
+
+.live-sign-alert-desc {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.live-sign-alert-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* 悬赏卡片与大师榜 */
+.bounty-card {
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  background: var(--surface);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.bounty-card.bounty-mine {
+  border: 2px solid #dc2626;
+  background: #fffafa;
+}
+
+.bounty-card.bounty-my-course {
+  border: 1.5px solid var(--text);
+}
+
+.bounty-badge-urgent {
+  background: #dc2626;
+  color: #fff;
+  border-color: #dc2626;
+  font-weight: 700;
+}
+
+.bounty-badge-course {
+  background: #1d4ed8;
+  color: #fff;
+  border-color: #1d4ed8;
+  font-weight: 600;
+}
+
+.bounty-student-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.student-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.student-pill.pending {
+  background: #fee2e2;
+  color: #991b1b;
+  border: 1px solid #fecaca;
+}
+
+.student-pill.done {
+  background: #dcfce7;
+  color: #166534;
+  border: 1px solid #bbf7d0;
+}
+
+.leaderboard-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.leaderboard-row:last-child {
+  border-bottom: none;
+}
+
+.leaderboard-rank {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 13px;
+  background: var(--surface-sub);
+  flex-shrink: 0;
+}
+
+.leaderboard-rank.rank-1 { background: #fef08a; color: #854d0e; border: 1px solid #facc15; }
+.leaderboard-rank.rank-2 { background: #e2e8f0; color: #334155; border: 1px solid #cbd5e1; }
+.leaderboard-rank.rank-3 { background: #fed7aa; color: #9a3412; border: 1px solid #fb923c; }
+
+.leaderboard-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-sub);
+  flex-shrink: 0;
+}
+
+.leaderboard-score-box {
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.leaderboard-score-num {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--text);
+}
+
+/* 互助页人体工学大按钮与醒目反馈 */
+.helper-ergonomic-shell {
+  padding-top: 12px;
+  padding-bottom: 28px;
+}
+
+.helper-mission-card {
+  background: var(--surface-sub);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.helper-identity-banner {
+  background: #f8fafc;
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.helper-action-section {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.helper-section-title {
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 8px;
+  color: var(--text);
+}
+
+.helper-big-btn-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 8px;
+}
+
+.helper-giant-btn {
+  min-height: 46px !important;
+  font-size: 14px !important;
+  font-weight: 700 !important;
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 8px !important;
+}
+
+.helper-big-input {
+  height: 44px;
+  font-size: 16px !important;
+  font-weight: 700;
+  text-align: center;
+  letter-spacing: 2px;
+}
+
+.helper-submit-giant-btn {
+  width: 100%;
+  min-height: 50px !important;
+  margin-top: 14px;
+  font-size: 16px !important;
+  font-weight: 800 !important;
+  border-radius: 10px !important;
+  letter-spacing: 0.5px;
+}
+
+.helper-battle-report {
+  border-radius: 10px;
+  padding: 12px 14px;
+  border: 2px solid var(--border-strong);
+  background: var(--surface);
+}
+
+.helper-battle-report.report-all-ok {
+  border-color: #16a34a;
+  background: #f0fdf4;
+}
+
+.helper-battle-report.report-partial {
+  border-color: #d97706;
+  background: #fffbeb;
+}
+
+.helper-battle-report.report-fail {
+  border-color: #dc2626;
+  background: #fef2f2;
+}
+
+.helper-claim-card {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+}

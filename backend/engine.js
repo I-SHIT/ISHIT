@@ -340,8 +340,30 @@ function resolveRelatedCxUids(message, eventData = {}) {
   return Array.from(uidSet);
 }
 
+const KNOWN_MISCONFIGURED_GROUP_MAP = {
+  '1178498159': '1134393264',
+};
+
+function normalizeConfiguredGroups(rawList) {
+  const arr = Array.isArray(rawList) ? rawList : [];
+  const out = [];
+  for (const item of arr) {
+    let gid = String(item || '').trim();
+    if (!gid) continue;
+    if (KNOWN_MISCONFIGURED_GROUP_MAP[gid]) {
+      gid = KNOWN_MISCONFIGURED_GROUP_MAP[gid];
+    }
+    if (!out.includes(gid)) out.push(gid);
+  }
+  return out;
+}
+
 function buildGroupAtMessage(baseMessage, groupId, relatedUids, cfg) {
-  const bindingsForGroup = (cfg.groupBindings && cfg.groupBindings[String(groupId)]) || {};
+  const bindingsForGroup =
+    (cfg.groupBindings &&
+      (cfg.groupBindings[String(groupId)] ||
+        (String(groupId) === '1134393264' ? cfg.groupBindings['1178498159'] : null))) ||
+    {};
   const globalBindings = cfg.accountQqBindings || {};
   const qqSet = new Set();
   for (const uid of relatedUids) {
@@ -376,7 +398,7 @@ async function broadcastNapCat(message, { force = false, eventType = 'sign_resul
     headers['X-ISHIT-Token'] = cfg.accessToken;
   }
 
-  const groups = (cfg.groups || cfg.groupIds || []).map((g) => String(g).trim()).filter(Boolean);
+  const groups = normalizeConfiguredGroups(cfg.groups || cfg.groupIds || []);
   const privateUsers = (cfg.privateUsers || cfg.privateIds || []).map((u) => String(u).trim()).filter(Boolean);
   const relatedUids = resolveRelatedCxUids(message, eventData);
   const groupMessages = {};
@@ -503,7 +525,7 @@ async function broadcastNapCatWithRetry(message, options = {}) {
       options,
       dedupKey: dedupKey || null,
       attempts: 1,
-      nextRetryAt: Date.now() + 8000,
+      nextRetryAt: Date.now() + 14000,
     });
     sysLog('NAPCAT', `群聊播报暂时失败(${res?.reason || '网络波动'})，已加入补偿队列自动重发`);
   }
@@ -527,11 +549,11 @@ async function flushNapCatRetryQueue() {
       sysLog('NAPCAT', '补偿队列重发群聊通知成功');
     } else {
       item.attempts += 1;
-      if (item.attempts >= 5) {
+      if (item.attempts >= 6) {
         pendingNapCatRetryQueue.splice(i, 1);
-        sysLog('WARN', '补偿队列群聊通知重试满 5 次仍失败，已放弃该条消息');
+        sysLog('WARN', '补偿队列群聊通知重试满 6 次仍失败，已放弃该条消息');
       } else {
-        item.nextRetryAt = Date.now() + item.attempts * 10000;
+        item.nextRetryAt = Date.now() + 15000;
       }
     }
   }
@@ -541,23 +563,74 @@ async function flushNapCatRetryQueue() {
 // 2. 协助链接会话管理
 // ============================================================================
 // 查找指定班级 (classId/courseId) 涵盖的所有已登录账号
-function findMatchingAccountsForClass(courseId, classId, explicitTargetUids = null) {
-  const allAccounts = store.accounts || [];
-  if (explicitTargetUids && explicitTargetUids.length > 0) {
-    return allAccounts.filter((u) => explicitTargetUids.includes(u.uid));
+// SSOT: 检查单个已登录账号针对指定课程/班级是否开启了自动签到/轮询
+function isAccountAutoSignEnabledForCourse(uid, courseId, classId) {
+  const accCfg = getEffectiveScheduleForCxUid(uid);
+  const eff = getEffectiveUserProfile(uid);
+  const courses = eff.coursesCache || [];
+  const matchedCourse = courses.find(
+    (c) =>
+      (classId && String(c.classId) === String(classId)) ||
+      (courseId && String(c.courseId) === String(courseId))
+  );
+  const resolvedCourseId = matchedCourse ? String(matchedCourse.courseId) : (courseId ? String(courseId) : "");
+  const st = resolvedCourseId ? eff.courseSettings?.[resolvedCourseId] : null;
+
+  // 测试课程拥有独立最高优先级，由 testPollingEnabled 独立控制
+  if (st?.isTestCourse) {
+    return st.testPollingEnabled !== false;
   }
-  if (!classId && !courseId) return allAccounts;
+
+  // 常规课程：必须开启账号轮询总开关 masterEnabled
+  if (!accCfg.masterEnabled) {
+    return false;
+  }
+
+  // 若非持续轮询模式，则尊重单门课程的 pollingEnabled 开关
+  if (!accCfg.forcePolling && st && st.pollingEnabled === false) {
+    return false;
+  }
+
+  return true;
+}
+
+function findMatchingAccountsForClass(courseId, classId, explicitTargetUids = null, options = {}) {
+  const { onlyAutoSignEnabled = false } = options || {};
+  const allAccounts = store.accounts || [];
+  if (Array.isArray(explicitTargetUids)) {
+    const targetSet = new Set(explicitTargetUids.map(String));
+    return allAccounts.filter((u) => targetSet.has(String(u.uid)));
+  }
+  if (!classId && !courseId) {
+    return onlyAutoSignEnabled
+      ? allAccounts.filter((u) => isAccountAutoSignEnabledForCourse(u.uid, courseId, classId))
+      : allAccounts;
+  }
   const matched = allAccounts.filter((u) => {
     const eff = getEffectiveUserProfile(u.uid);
     const list = eff.coursesCache || [];
-    if (list.length === 0) return true; // 若该账号尚未缓存课程表，默认纳入尝试
+    if (list.length === 0) return !onlyAutoSignEnabled;
     return list.some(
       (c) =>
         (classId && String(c.classId) === String(classId)) ||
         (!classId && courseId && String(c.courseId) === String(courseId))
     );
   });
+  if (onlyAutoSignEnabled) {
+    return matched.filter((u) => isAccountAutoSignEnabledForCourse(u.uid, courseId, classId));
+  }
   return matched.length > 0 ? matched : allAccounts;
+}
+
+function getPublicBaseUrlClean() {
+  let rawBaseUrl = String(store.napcat?.publicBaseUrl || 'https://ishit.pw').trim();
+  if (!rawBaseUrl || /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/.*)?$/i.test(rawBaseUrl)) {
+    rawBaseUrl = 'https://ishit.pw';
+  } else if (!/^https?:\/\//i.test(rawBaseUrl)) {
+    rawBaseUrl = `https://${rawBaseUrl}`;
+  }
+  rawBaseUrl = rawBaseUrl.replace(/^http:\/\/ishit\.pw\b/i, 'https://ishit.pw');
+  return rawBaseUrl.replace(/\/+$/, '');
 }
 
 function createHelperSession({
@@ -570,8 +643,21 @@ function createHelperSession({
   activeId = '',
   activeName = '',
   signType = 'normal',
+  signTypeLabel = '',
   targetUids = [],
   targetNames = [],
+  pendingUids = null,
+  pendingNames = null,
+  succeededUids = [],
+  succeededNames = [],
+  designatedPlace = '',
+  locationRange = '',
+  needLocation = false,
+  needPhoto = false,
+  endTimeMs = 0,
+  signedCount = 0,
+  totalCount = 0,
+  waitingThreshold = false,
   captchaKey = null,
   creatorUsername = '',
   creatorRole = 'admin',
@@ -579,17 +665,41 @@ function createHelperSession({
 }) {
   store.helperSessions = (store.helperSessions || []).filter((s) => s.expiresAt > Date.now());
 
-  // 针对同一签到活动 (activeId + classId)，若已有未完成协助会话，直接合并账号并复用同一个链接，绝不重复生成多个链接
-  if (mode === 'sign' && activeId) {
+  if ((mode === 'sign' || mode === 'captcha') && activeId) {
     const existing = store.helperSessions.find(
-      (s) => s.mode === 'sign' && String(s.activeId) === String(activeId) && !s.completed
+      (s) => (s.mode === 'sign' || s.mode === 'captcha') && String(s.activeId) === String(activeId) && !s.completed
     );
     if (existing) {
-      const mergedUids = [...new Set([...(existing.targetUids || []), ...(targetUids || [])])];
+      const mergedUids = [...new Set([...(existing.targetUids || []), ...(targetUids || [])].map(String))];
       const mergedNames = [...new Set([...(existing.targetNames || []), ...(targetNames || [])])];
       existing.targetUids = mergedUids;
       existing.targetNames = mergedNames;
+      if (Array.isArray(pendingUids)) existing.pendingUids = pendingUids.map(String);
+      if (Array.isArray(pendingNames)) existing.pendingNames = pendingNames;
+      if (Array.isArray(succeededUids) && succeededUids.length > 0) {
+        existing.succeededUids = [...new Set([...(existing.succeededUids || []), ...succeededUids.map(String)])];
+      }
+      if (Array.isArray(succeededNames) && succeededNames.length > 0) {
+        existing.succeededNames = [...new Set([...(existing.succeededNames || []), ...succeededNames])];
+      }
       if (title) existing.title = title;
+      if (signType) existing.signType = signType;
+      if (signTypeLabel) existing.signTypeLabel = signTypeLabel;
+      if (designatedPlace) existing.designatedPlace = designatedPlace;
+      if (locationRange) existing.locationRange = locationRange;
+      if (needLocation !== undefined) existing.needLocation = Boolean(needLocation || existing.needLocation);
+      if (needPhoto !== undefined) existing.needPhoto = Boolean(needPhoto || existing.needPhoto);
+      if (endTimeMs > 0) existing.endTimeMs = Number(endTimeMs);
+      if (totalCount > 0) {
+        existing.signedCount = Number(signedCount || 0);
+        existing.totalCount = Number(totalCount || 0);
+      }
+      existing.waitingThreshold = Boolean(waitingThreshold);
+      if (captchaKey) {
+        existing.captchaKey = captchaKey;
+        existing.mode = 'captcha';
+      }
+      existing.updatedAt = Date.now();
       existing.expiresAt = Date.now() + ttlMinutes * 60 * 1000;
       saveStore();
       return existing;
@@ -597,9 +707,10 @@ function createHelperSession({
   }
 
   const token = EncryptionUtil.getUniqueId();
+  const cleanTargetUids = (targetUids || []).map(String);
   const session = {
     token,
-    mode, // 'sign' | 'login' | 'captcha'
+    mode,
     title,
     courseId: String(courseId),
     classId: String(classId),
@@ -608,12 +719,27 @@ function createHelperSession({
     activeId: String(activeId),
     activeName,
     signType,
-    targetUids,
-    targetNames,
+    signTypeLabel: signTypeLabel || SIGN_TYPE_LABEL[signType] || signType,
+    targetUids: cleanTargetUids,
+    targetNames: targetNames || [],
+    pendingUids: Array.isArray(pendingUids) ? pendingUids.map(String) : cleanTargetUids,
+    pendingNames: Array.isArray(pendingNames) ? pendingNames : (targetNames || []),
+    succeededUids: Array.isArray(succeededUids) ? succeededUids.map(String) : [],
+    succeededNames: Array.isArray(succeededNames) ? succeededNames : [],
+    creditedUids: [],
+    designatedPlace: String(designatedPlace || ''),
+    locationRange: String(locationRange || ''),
+    needLocation: Boolean(needLocation || designatedPlace || signType === 'location'),
+    needPhoto: Boolean(needPhoto || signType === 'photo'),
+    endTimeMs: Number(endTimeMs || 0),
+    signedCount: Number(signedCount || 0),
+    totalCount: Number(totalCount || 0),
+    waitingThreshold: Boolean(waitingThreshold),
     captchaKey,
     creatorUsername: String(creatorUsername || ''),
     creatorRole: String(creatorRole || 'admin'),
     createdAt: Date.now(),
+    updatedAt: Date.now(),
     expiresAt: Date.now() + ttlMinutes * 60 * 1000,
     completed: false,
     lastResult: null,
@@ -625,6 +751,177 @@ function createHelperSession({
 
 function getHelperSession(token) {
   return (store.helperSessions || []).find((s) => s.token === token && s.expiresAt > Date.now()) || null;
+}
+
+// 跨端强提醒实时事件总线（覆盖：签到发现、签到成功、签到失败/需悬赏协助）
+function pushRealtimeSignAlert({
+  eventType = 'sign_detected', // 'sign_detected' | 'sign_success' | 'sign_failed'
+  title = '',
+  body = '',
+  courseId = '',
+  classId = '',
+  courseName = '',
+  activeId = '',
+  activeName = '',
+  signType = 'normal',
+  signTypeLabel = '',
+  targetUids = [],
+  targetNames = [],
+  helperToken = '',
+  shareUrl = '',
+  urgent = true,
+  dedupKey = '',
+}) {
+  store.recentAlerts = Array.isArray(store.recentAlerts) ? store.recentAlerts : [];
+  const now = Date.now();
+  if (dedupKey) {
+    const dup = store.recentAlerts.find((a) => a.dedupKey === dedupKey && now - (a.timeMs || 0) < 90 * 1000);
+    if (dup) return dup;
+  }
+  const alertItem = {
+    id: `alert_${now}_${Math.random().toString(36).slice(2, 7)}`,
+    dedupKey: dedupKey || `${eventType}_${activeId}_${now}`,
+    eventType,
+    timeMs: now,
+    time: new Date(now).toLocaleTimeString('zh-CN', { hour12: false }),
+    title: String(title || '学习通签到通知'),
+    body: String(body || ''),
+    courseId: String(courseId || ''),
+    classId: String(classId || ''),
+    courseName: String(courseName || ''),
+    activeId: String(activeId || ''),
+    activeName: String(activeName || ''),
+    signType: String(signType || 'normal'),
+    signTypeLabel: String(signTypeLabel || SIGN_TYPE_LABEL[signType] || signType),
+    targetUids: (targetUids || []).map(String),
+    targetNames: (targetNames || []).map(String),
+    helperToken: String(helperToken || ''),
+    shareUrl: String(shareUrl || ''),
+    urgent: Boolean(urgent),
+  };
+  store.recentAlerts.unshift(alertItem);
+  if (store.recentAlerts.length > 80) {
+    store.recentAlerts = store.recentAlerts.slice(0, 80);
+  }
+  saveStore();
+  return alertItem;
+}
+
+// 签到大师排行榜积分结算（以学号 studentId 为唯一主键 SSOT，支持同一学号绑定多个曾用名称/称号）
+function creditHelperPointsToStudent({
+  studentId = '',
+  helperName = '',
+  cxAccount = null,
+  points = 0,
+  activeId = '',
+  courseName = '',
+}) {
+  const pts = Math.max(0, Number(points || 0));
+  if (pts <= 0) return null;
+  store.helperLeaderboard = store.helperLeaderboard || {};
+
+  let matchedAcc = cxAccount;
+  const cleanSid = String(studentId || cxAccount?.studentId || '').trim();
+  if (!matchedAcc && cleanSid) {
+    matchedAcc = (store.accounts || []).find(
+      (a) => a && (String(a.studentId || '').trim() === cleanSid || String(a.uid) === cleanSid)
+    );
+  }
+  const key = cleanSid || String(matchedAcc?.studentId || matchedAcc?.uid || helperName || 'anonymous').trim();
+  if (!key) return null;
+
+  const existing = store.helperLeaderboard[key] || {
+    key,
+    studentId: cleanSid || String(matchedAcc?.studentId || ''),
+    boundUid: String(matchedAcc?.uid || ''),
+    cxName: String(matchedAcc?.name || ''),
+    avatar: String(matchedAcc?.avatar || ''),
+    school: String(matchedAcc?.school || ''),
+    names: [],
+    score: 0,
+    assistCount: 0,
+    lastAssistAt: 0,
+    lastCourseName: '',
+  };
+
+  if (cleanSid) existing.studentId = cleanSid;
+  if (matchedAcc) {
+    existing.boundUid = String(matchedAcc.uid || existing.boundUid || '');
+    existing.cxName = String(matchedAcc.name || existing.cxName || '');
+    existing.avatar = String(matchedAcc.avatar || existing.avatar || '');
+    existing.school = String(matchedAcc.school || existing.school || '');
+    if (matchedAcc.studentId && !existing.studentId) existing.studentId = String(matchedAcc.studentId);
+  }
+
+  const aliasCandidates = [String(helperName || '').trim(), String(matchedAcc?.name || '').trim()].filter(Boolean);
+  existing.names = Array.isArray(existing.names) ? existing.names : [];
+  for (const alias of aliasCandidates) {
+    if (!existing.names.includes(alias)) existing.names.push(alias);
+  }
+
+  existing.score = Number(existing.score || 0) + pts;
+  existing.assistCount = Number(existing.assistCount || 0) + 1;
+  existing.lastAssistAt = Date.now();
+  if (courseName) existing.lastCourseName = String(courseName);
+
+  store.helperLeaderboard[key] = existing;
+  saveStore();
+  return existing;
+}
+
+function claimHelperPointsByToken({ claimToken = '', helperName = '', studentId = '' }) {
+  store.helperClaims = store.helperClaims || {};
+  const claim = store.helperClaims[String(claimToken || '').trim()];
+  if (!claim) return { ok: false, msg: '积分认领凭证不存在或已失效' };
+  if (claim.claimed) return { ok: false, msg: '该次协助积分已被认领，请勿重复提交' };
+  const cleanSid = String(studentId || '').trim();
+  const cleanName = String(helperName || '').trim();
+  if (!cleanSid) return { ok: false, msg: '请填写您的学号（作为积分归属唯一凭证）' };
+
+  const entry = creditHelperPointsToStudent({
+    studentId: cleanSid,
+    helperName: cleanName || cleanSid,
+    points: Number(claim.points || 0),
+    activeId: claim.activeId,
+    courseName: claim.courseName,
+  });
+  claim.claimed = true;
+  claim.claimedByStudentId = cleanSid;
+  claim.claimedByName = cleanName;
+  claim.claimedAt = Date.now();
+  saveStore();
+  return { ok: true, entry, points: Number(claim.points || 0) };
+}
+
+function getFormattedLeaderboard() {
+  store.helperLeaderboard = store.helperLeaderboard || {};
+  const accounts = store.accounts || [];
+  const entries = Object.values(store.helperLeaderboard).map((item) => {
+    const sid = String(item.studentId || '').trim();
+    const uid = String(item.boundUid || '').trim();
+    const matchedAcc = accounts.find(
+      (a) => (uid && String(a.uid) === uid) || (sid && String(a.studentId || '').trim() === sid)
+    );
+    const cxName = matchedAcc?.name || item.cxName || '';
+    const names = Array.isArray(item.names) ? [...item.names] : [];
+    if (cxName && !names.includes(cxName)) names.unshift(cxName);
+    return {
+      key: item.key || sid || uid,
+      studentId: sid || matchedAcc?.studentId || '',
+      boundUid: matchedAcc?.uid || uid || '',
+      cxName: cxName || names[0] || '匿名侠客',
+      displayName: names[0] || cxName || sid || '匿名侠客',
+      names,
+      avatar: matchedAcc?.avatar || item.avatar || (matchedAcc?.uid ? `https://photo.chaoxing.com/p/${matchedAcc.uid}_80` : ''),
+      school: matchedAcc?.school || item.school || '',
+      score: Number(item.score || 0),
+      assistCount: Number(item.assistCount || 0),
+      lastAssistAt: Number(item.lastAssistAt || 0),
+      lastCourseName: item.lastCourseName || '',
+    };
+  });
+  entries.sort((a, b) => b.score - a.score || b.assistCount - a.assistCount || b.lastAssistAt - a.lastAssistAt);
+  return entries.map((e, idx) => ({ ...e, rank: idx + 1 }));
 }
 
 // ============================================================================
@@ -714,25 +1011,70 @@ async function performSingleAccountSign({
   };
   const teacherBdLat = parseValidCoord(activeInfo.locationLatitude, contentObj.locationLatitude, activeInfo.latitude);
   const teacherBdLng = parseValidCoord(activeInfo.locationLongitude, contentObj.locationLongitude, activeInfo.longitude);
+  const teacherGdLat = parseValidCoord(activeInfo.locationLatitude_gd, contentObj.locationLatitude_gd);
+  const teacherGdLng = parseValidCoord(activeInfo.locationLongitude_gd, contentObj.locationLongitude_gd);
+  const teacherRangeM = Number(String(activeInfo.locationRange || contentObj.locationRange || '').replace(/[^\d.]/g, '')) || 100;
 
-  const resolvedAddress = address || courseSetting?.location?.address || designatedPlace || userDefLoc.address || '教学楼';
+  const calcBdDistanceM = (lat1, lng1, lat2, lng2) => {
+    const R = 6371000;
+    const dLat = ((lat1 - lat2) * Math.PI) / 180;
+    const dLng = ((lng1 - lng2) * Math.PI) / 180;
+    const a =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos((lat2 * Math.PI) / 180) * Math.cos((lat1 * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(Math.max(0, Math.min(1, a))));
+  };
+
+  const hasManualCoord =
+    latitude !== null && latitude !== undefined && latitude !== '' &&
+    longitude !== null && longitude !== undefined && longitude !== '';
+  const hasTeacherCoord = (teacherBdLat !== null && teacherBdLng !== null) || (teacherGdLat !== null && teacherGdLng !== null);
+
+  let resolvedAddress = address || designatedPlace || courseSetting?.location?.address || userDefLoc.address || '教学楼';
   let resolvedLat = null;
   let resolvedLng = null;
   let coordSystem = 'wgs84';
 
-  if (latitude !== null && latitude !== undefined && latitude !== '' && longitude !== null && longitude !== undefined && longitude !== '') {
+  if (hasManualCoord) {
     resolvedLat = Number(latitude);
     resolvedLng = Number(longitude);
     coordSystem = 'wgs84';
+    resolvedAddress = address || designatedPlace || courseSetting?.location?.address || userDefLoc.address || '教学楼';
+  } else if (hasTeacherCoord) {
+    // 教师活动明确下发了目标靶心坐标：计算课程预设坐标是否在允许半径内，若超出则强制锁死教师靶心坐标（<4米微扰防雷同）
+    let targetBdLat = teacherBdLat;
+    let targetBdLng = teacherBdLng;
+    if ((targetBdLat === null || targetBdLng === null) && teacherGdLat !== null && teacherGdLng !== null) {
+      const bdFromGd = CXProtocol.gcj02ToBd09(teacherGdLat, teacherGdLng);
+      targetBdLat = bdFromGd.lat;
+      targetBdLng = bdFromGd.lng;
+    }
+
+    let useCoursePreset = false;
+    if (courseSetting?.location?.latitude && courseSetting?.location?.longitude) {
+      const presetBd = CXProtocol.wgs84ToBd09(Number(courseSetting.location.latitude), Number(courseSetting.location.longitude));
+      const distM = calcBdDistanceM(presetBd.lat, presetBd.lng, targetBdLat, targetBdLng);
+      if (distM <= Math.max(15, teacherRangeM - 10)) {
+        useCoursePreset = true;
+      }
+    }
+
+    if (useCoursePreset) {
+      resolvedLat = Number(courseSetting.location.latitude);
+      resolvedLng = Number(courseSetting.location.longitude);
+      coordSystem = 'wgs84';
+      resolvedAddress = address || courseSetting?.location?.address || designatedPlace || userDefLoc.address || '教学楼';
+    } else {
+      resolvedLat = targetBdLat + (Math.random() - 0.5) * 0.00003;
+      resolvedLng = targetBdLng + (Math.random() - 0.5) * 0.00003;
+      coordSystem = 'bd09';
+      resolvedAddress = address || designatedPlace || courseSetting?.location?.address || userDefLoc.address || '教学楼';
+    }
   } else if (courseSetting?.location?.latitude && courseSetting?.location?.longitude) {
     resolvedLat = Number(courseSetting.location.latitude);
     resolvedLng = Number(courseSetting.location.longitude);
     coordSystem = 'wgs84';
-  } else if (teacherBdLat !== null && teacherBdLng !== null) {
-    // 若未单独指定该课预设，且教师活动自带目标百度坐标，直接精确对齐教师要求坐标（并加微小随机偏移 <5米）
-    resolvedLat = teacherBdLat + (Math.random() - 0.5) * 0.00004;
-    resolvedLng = teacherBdLng + (Math.random() - 0.5) * 0.00004;
-    coordSystem = 'bd09';
+    resolvedAddress = address || courseSetting?.location?.address || designatedPlace || userDefLoc.address || '教学楼';
   } else {
     resolvedLat = Number(userDefLoc.latitude ?? 30.8328);
     resolvedLng = Number(userDefLoc.longitude ?? 121.5035);
@@ -1159,7 +1501,7 @@ async function executeSignForActive({
         continue;
       }
 
-      const respStr = await performSingleAccountSign({
+      let respStr = await performSingleAccountSign({
         user,
         accountIndex: i,
         courseId,
@@ -1182,6 +1524,34 @@ async function executeSignForActive({
         longitude,
         objectId,
       });
+
+      // 自愈兜底：若因手动传入坐标偏移触发 errorLocation，立即剥离自定义坐标并对齐教师靶心坐标重签一次
+      if (respStr.startsWith('errorLocation')) {
+        sysLog('WARN', `账号[${user.name || user.uid}] 位置偏差(${respStr})，正在强制锁定教师靶心坐标重签...`, { uids: [user.uid] });
+        respStr = await performSingleAccountSign({
+          user,
+          accountIndex: i,
+          courseId,
+          classId,
+          cpi,
+          courseName,
+          activeId,
+          activeName,
+          activeInfo,
+          signType,
+          needPhoto,
+          needFace,
+          designatedPlace,
+          signCode: resolvedCode,
+          enc: resolvedEnc,
+          enc2,
+          validate,
+          address: designatedPlace || null,
+          latitude: null,
+          longitude: null,
+          objectId,
+        });
+      }
 
       // 处理防作弊滑块验证码响应: validate 或 validate_enc2 -> 优先全自动视觉识别过滑块并立即重签！
       if (respStr.startsWith('validate')) {
@@ -1283,17 +1653,22 @@ async function executeSignForActive({
   }
 
   let helperShareUrl = null;
-  const pendingHelperUsers = results.filter((r) => !r.ok);
+  let activeHelperToken = '';
+  const succeededUsers = results.filter((r) => r.ok);
+  const failedUsers = results.filter((r) => !r.ok);
+  const pendingHelperUsers = failedUsers;
   const mergedNamesStr = (pendingHelperUsers.length > 0 ? pendingHelperUsers : accounts)
     .map((u) => u.name || u.uid)
     .join('/');
+  const signTypeLabelResolved = needPhoto && signType === 'normal' ? '拍照签到' : (SIGN_TYPE_LABEL[signType] || signType);
 
-  if (needHelperFlag) {
+  // 零延迟高同步：只要存在任何未签成功账号（无论扫码/手势/定位失败/滑块/拍照/未知原因），立即上榜签到悬赏大厅
+  if (needHelperFlag || pendingHelperUsers.length > 0) {
     const hs = createHelperSession({
       mode: needCaptchaKey ? 'captcha' : 'sign',
       title: needCaptchaKey
         ? `帮 ${mergedNamesStr} 完成《${courseName}》滑块验证`
-        : `帮 ${mergedNamesStr} 签到《${courseName}》(${SIGN_TYPE_LABEL[signType] || signType})`,
+        : `帮 ${mergedNamesStr} 签到《${courseName}》(${signTypeLabelResolved})`,
       courseId,
       classId,
       cpi,
@@ -1301,23 +1676,25 @@ async function executeSignForActive({
       activeId,
       activeName,
       signType,
-      targetUids: (pendingHelperUsers.length > 0 ? pendingHelperUsers : accounts).map((u) => u.uid),
-      targetNames: (pendingHelperUsers.length > 0 ? pendingHelperUsers : accounts).map((u) => u.name || u.uid),
+      signTypeLabel: signTypeLabelResolved,
+      targetUids: accounts.map((u) => u.uid),
+      targetNames: accounts.map((u) => u.name || u.uid),
+      pendingUids: pendingHelperUsers.map((u) => u.uid),
+      pendingNames: pendingHelperUsers.map((u) => u.name || u.uid),
+      succeededUids: succeededUsers.map((u) => u.uid),
+      succeededNames: succeededUsers.map((u) => u.name || u.uid),
+      designatedPlace,
+      locationRange,
+      needLocation: Boolean(designatedPlace || signType === 'location'),
+      needPhoto,
+      endTimeMs: Number(activeInfo.endTime || activeInfo.endtime || 0),
+      waitingThreshold: false,
       captchaKey: needCaptchaKey,
     });
-    let rawBaseUrl = String(store.napcat?.publicBaseUrl || 'https://ishit.pw').trim();
-    if (!rawBaseUrl || /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/.*)?$/i.test(rawBaseUrl)) {
-      rawBaseUrl = 'https://ishit.pw';
-    } else if (!/^https?:\/\//i.test(rawBaseUrl)) {
-      rawBaseUrl = `https://${rawBaseUrl}`;
-    }
-    rawBaseUrl = rawBaseUrl.replace(/^http:\/\/ishit\.pw\b/i, 'https://ishit.pw');
-    const baseUrl = rawBaseUrl.replace(/\/+$/, '');
+    activeHelperToken = hs.token;
+    const baseUrl = getPublicBaseUrlClean();
     helperShareUrl = `${baseUrl}/?help=${hs.token}`;
   }
-
-  const succeededUsers = results.filter((r) => r.ok);
-  const failedUsers = results.filter((r) => !r.ok);
 
   if (succeededUsers.length > 0) {
     markAccountsNotifiedForActive(
@@ -1326,11 +1703,27 @@ async function executeSignForActive({
     );
   }
 
-  // 只要本次所有账号均已签到成功，自动将该活动的未完成协助会话标记为已完成
+  // 只要本次所有账号均已签到成功，自动将该活动的未完成协助会话标记为已完成，并实时同步活动监测列表
   if (succeededUsers.length > 0 && failedUsers.length === 0) {
     for (const hs of store.helperSessions || []) {
       if (!hs.completed && String(hs.activeId) === String(activeId)) {
         hs.completed = true;
+        hs.closeReason = '全部已签到完成';
+      }
+    }
+    markActiveFullyCompleted(activeId);
+    lastDetectedActives = (lastDetectedActives || []).filter(
+      (it) => String((it.active || it)?.id) !== String(activeId)
+    );
+  } else {
+    for (const it of lastDetectedActives || []) {
+      const act = it.active || it;
+      if (String(act?.id) === String(activeId)) {
+        it.pendingUids = failedUsers.map((u) => String(u.uid));
+        it.pendingNames = failedUsers.map((u) => u.name || u.uid);
+        it.succeededUids = succeededUsers.map((u) => String(u.uid));
+        it.succeededNames = succeededUsers.map((u) => u.name || u.uid);
+        it.helperToken = activeHelperToken || it.helperToken || '';
       }
     }
   }
@@ -1368,6 +1761,52 @@ async function executeSignForActive({
   store.signHistory.unshift(record);
   if (store.signHistory.length > 80) store.signHistory.pop();
   saveStore();
+
+  // 实时强通知：签到成功 & 签到失败（含待协助）均独立推送到用户端通知总线
+  const newlySucceededAlertUsers = succeededUsers.filter((r) => !r.already);
+  if (newlySucceededAlertUsers.length > 0) {
+    const okNames = newlySucceededAlertUsers.map((r) => r.name || r.uid);
+    pushRealtimeSignAlert({
+      eventType: 'sign_success',
+      title: `✅ 签到成功：《${courseName}》`,
+      body: `${activeName} (${record.signTypeLabel}) · 已签上：${okNames.join(' / ')}`,
+      courseId,
+      classId,
+      courseName,
+      activeId,
+      activeName,
+      signType,
+      signTypeLabel: record.signTypeLabel,
+      targetUids: newlySucceededAlertUsers.map((r) => r.uid),
+      targetNames: okNames,
+      helperToken: activeHelperToken,
+      shareUrl: helperShareUrl || '',
+      urgent: false,
+      dedupKey: `ok_${activeId}_${newlySucceededAlertUsers.map((r) => r.uid).sort().join(',')}`,
+    });
+  }
+  if (failedUsers.length > 0) {
+    const failNames = failedUsers.map((r) => r.name || r.uid);
+    const failReasons = Array.from(new Set(failedUsers.map((r) => r.msg || '需人工协助'))).slice(0, 2).join('；');
+    pushRealtimeSignAlert({
+      eventType: 'sign_failed',
+      title: `⚠️ 签到失败/待协助：《${courseName}》`,
+      body: `${activeName} (${record.signTypeLabel}) · 未签上：${failNames.join(' / ')}（${failReasons}）`,
+      courseId,
+      classId,
+      courseName,
+      activeId,
+      activeName,
+      signType,
+      signTypeLabel: record.signTypeLabel,
+      targetUids: failedUsers.map((r) => r.uid),
+      targetNames: failNames,
+      helperToken: activeHelperToken,
+      shareUrl: helperShareUrl || '',
+      urgent: true,
+      dedupKey: `fail_${activeId}_${failedUsers.map((r) => r.uid).sort().join(',')}_${failReasons}`,
+    });
+  }
 
   // 合并群聊提醒格式：将签到成功的多个账号合并为一行“已签成功：A / B / C”，失败/待协助的合并展示
   const successNamesStr = succeededUsers.map((r) => r.name || r.uid).join(' / ');
@@ -1685,14 +2124,23 @@ async function collectEnabledClassEntries(forceAll = false, onlyUids = null) {
           memberUids: [],
           memberNames: [],
           memberCpis: {},
+          probeUids: [],
         });
       }
       const entry = classMap.get(key);
-      if (shouldScan) entry.shouldScan = true;
-      if (!entry.memberUids.includes(uid)) {
-        entry.memberUids.push(uid);
-        entry.memberNames.push(acc.name || uid);
-        entry.memberCpis[uid] = c.cpi;
+      if (!entry.probeUids.includes(uid)) {
+        entry.probeUids.push(uid);
+      }
+      entry.memberCpis[uid] = c.cpi;
+      if (shouldScan) {
+        if (!entry.shouldScan) {
+          entry.scanUid = uid;
+        }
+        entry.shouldScan = true;
+        if (!entry.memberUids.includes(uid)) {
+          entry.memberUids.push(uid);
+          entry.memberNames.push(acc.name || uid);
+        }
       }
     }
   }
@@ -1734,7 +2182,7 @@ async function pollCoursesOnce({ forceAll = false, triggerSource = '自动轮询
 
     for (let idx = 0; idx < enabledEntries.length; idx++) {
       if (idx > 0) {
-        await sleepMs(450);
+        await sleepMs(1100);
       }
       const entry = enabledEntries[idx];
       const course = entry.course;
@@ -1742,13 +2190,15 @@ async function pollCoursesOnce({ forceAll = false, triggerSource = '自动轮询
       let actives = null;
       let lastErr = null;
 
-      // 多账号轮转与频控故障转移：同班级如有多个已登录账号，轮流使用不同账号扫描；若某账号处于学习通频控中，立即无缝切下一个账号！
-      const candidateUids = entry.memberUids && entry.memberUids.length > 0 ? [...entry.memberUids] : [entry.scanUid];
-      pollCoursesOnce._rrIndex = ((pollCoursesOnce._rrIndex || 0) + 1) % Math.max(1, candidateUids.length);
-      const orderedUids = [
-        ...candidateUids.slice(pollCoursesOnce._rrIndex),
-        ...candidateUids.slice(0, pollCoursesOnce._rrIndex),
+      // Probe pool vs sign target pool decoupling: rotate memberUids first, fallback to probeUids for read-only active scanning
+      const primaryScanUids = entry.memberUids && entry.memberUids.length > 0 ? [...entry.memberUids] : [entry.scanUid];
+      pollCoursesOnce._rrIndex = ((pollCoursesOnce._rrIndex || 0) + 1) % Math.max(1, primaryScanUids.length);
+      const rotatedPrimaryUids = [
+        ...primaryScanUids.slice(pollCoursesOnce._rrIndex),
+        ...primaryScanUids.slice(0, pollCoursesOnce._rrIndex),
       ];
+      const fallbackProbeUids = (entry.probeUids || []).filter((u) => !rotatedPrimaryUids.includes(u));
+      const orderedUids = [...rotatedPrimaryUids, ...fallbackProbeUids];
 
       for (const tryUid of orderedUids) {
         const tryCpi = (entry.memberCpis && entry.memberCpis[tryUid]) || course.cpi;
@@ -1829,6 +2279,47 @@ async function pollCoursesOnce({ forceAll = false, triggerSource = '自动轮询
           if (deferredUids.length > 0) {
             act.waitingThreshold = true;
             act.thresholdRatio = maxDeferredThreshold || 0.3;
+            const deferredNameList = deferredUids.map(
+              (u) => (store.accounts || []).find((a) => String(a.uid) === String(u))?.name || u
+            );
+            const waitHs = createHelperSession({
+              mode: 'sign',
+              title: `帮 ${deferredNameList.join('/')} 签到《${course.name}》(${SIGN_TYPE_LABEL[act.signType] || act.signType || '签到'})`,
+              courseId: course.courseId,
+              classId: course.classId,
+              cpi: course.cpi,
+              courseName: course.name,
+              activeId: act.id,
+              activeName: act.name,
+              signType: act.signType || 'normal',
+              signTypeLabel: SIGN_TYPE_LABEL[act.signType] || act.signType || '课堂签到',
+              targetUids: entry.memberUids,
+              targetNames: entry.memberNames,
+              pendingUids: deferredUids,
+              pendingNames: deferredNameList,
+              endTimeMs: Number(stats.endTimeMs || 0),
+              signedCount: Number(stats.signedCount || 0),
+              totalCount: Number(stats.totalCount || 0),
+              waitingThreshold: true,
+            });
+            pushRealtimeSignAlert({
+              eventType: 'sign_detected',
+              title: `🔔 发现新签到：《${course.name}》`,
+              body: `${act.name} · 当前已签 ${stats.signedCount}/${stats.totalCount}，防钓鱼盯盘或点击立即前往签`,
+              courseId: course.courseId,
+              classId: course.classId,
+              courseName: course.name,
+              activeId: act.id,
+              activeName: act.name,
+              signType: act.signType || 'normal',
+              signTypeLabel: SIGN_TYPE_LABEL[act.signType] || act.signType || '签到',
+              targetUids: deferredUids,
+              targetNames: deferredNameList,
+              helperToken: waitHs.token,
+              shareUrl: `${getPublicBaseUrlClean()}/?help=${waitHs.token}`,
+              urgent: true,
+              dedupKey: `detect_${act.id}_${deferredUids.slice().sort().join(',')}`,
+            });
             const prevTask = pendingThresholdWatchMap.get(handledKey);
             pendingThresholdWatchMap.set(handledKey, {
               activeId: String(act.id),
@@ -1917,19 +2408,41 @@ async function pollCoursesOnce({ forceAll = false, triggerSource = '自动轮询
       });
     }
 
+    // 过滤掉在本次轮询中已经全员签到完成或已截止的活动，并附带关联悬赏与实时待签状态，防止活动监测死灰复燃或重复签到
+    const liveFilteredDetected = detected.filter((it) => {
+      const act = it.active || it;
+      const aid = String(act?.id || '');
+      if (!aid || isActiveFullyCompleted(aid)) return false;
+      if (act.endTimeMs && act.endTimeMs > 0 && Date.now() > act.endTimeMs + 4000) return false;
+      const hs = (store.helperSessions || []).find(
+        (s) => !s.completed && !s.expired && (s.mode === 'sign' || s.mode === 'captcha') && String(s.activeId) === aid
+      );
+      if (hs) {
+        it.pendingUids = Array.isArray(hs.pendingUids) ? hs.pendingUids : (hs.targetUids || []);
+        it.pendingNames = Array.isArray(hs.pendingNames) ? hs.pendingNames : (hs.targetNames || []);
+        it.succeededUids = Array.isArray(hs.succeededUids) ? hs.succeededUids : [];
+        it.succeededNames = Array.isArray(hs.succeededNames) ? hs.succeededNames : [];
+        it.helperToken = hs.token;
+        it.designatedPlace = hs.designatedPlace || '';
+        it.locationRange = hs.locationRange || '';
+        if (it.pendingUids.length === 0 && it.succeededUids.length > 0) return false;
+      }
+      return true;
+    });
+
     if (isScopedScan) {
       const scopedSet = new Set(onlyUids.map(String));
       const keptOther = (lastDetectedActives || []).filter(
         (item) => !(item.memberUids || []).every((u) => scopedSet.has(String(u)))
       );
       const mergedMap = new Map();
-      for (const it of [...detected, ...keptOther]) {
-        const aid = String(it.active?.id || it.id || "");
-        if (!mergedMap.has(aid)) mergedMap.set(aid, it);
+      for (const it of [...liveFilteredDetected, ...keptOther]) {
+        const aid = String(it.active?.id || it.id || '');
+        if (!mergedMap.has(aid) && !isActiveFullyCompleted(aid)) mergedMap.set(aid, it);
       }
       lastDetectedActives = Array.from(mergedMap.values());
-    } else if (!hitRateLimit || detected.length > 0) {
-      lastDetectedActives = detected;
+    } else if (!hitRateLimit || liveFilteredDetected.length > 0 || detected.length > 0) {
+      lastDetectedActives = liveFilteredDetected;
     }
   } catch (e) {
     sysLog('ERROR', `轮询异常: ${e.message}`, scopedLogMeta);
@@ -1948,6 +2461,7 @@ let isWatchingQr = false;
 const processedChatImageIds = new Set();
 const processedQrEncKeys = new Set();
 const notifiedAttendSuccessMap = new Map(); // activeId -> Set(uid)
+const fullySignedActiveIds = new Set(); // 已确认全员签完或截止的活动 ID，防止活动监测死灰复燃或重复签到
 
 // 记录在 executeSignForActive 中已经播报过成功的账号，避免状态巡检器重复播报同一账号
 function markAccountsNotifiedForActive(activeId, uids) {
@@ -1955,6 +2469,14 @@ function markAccountsNotifiedForActive(activeId, uids) {
   if (!notifiedAttendSuccessMap.has(aid)) notifiedAttendSuccessMap.set(aid, new Set());
   const set = notifiedAttendSuccessMap.get(aid);
   for (const u of uids || []) set.add(String(u));
+}
+
+function markActiveFullyCompleted(activeId) {
+  if (activeId) fullySignedActiveIds.add(String(activeId));
+}
+
+function isActiveFullyCompleted(activeId) {
+  return Boolean(activeId && fullySignedActiveIds.has(String(activeId)));
 }
 
 function getNapCatRecentImagesEndpoint() {
@@ -2164,8 +2686,17 @@ async function handleDetectedQrCodeText(qrText, meta = {}) {
 
   let anySigned = false;
   for (const t of targets) {
-    const matchedAccounts = findMatchingAccountsForClass(t.courseId, t.classId, null);
+    const hsUids = Array.isArray(t.helperSession?.targetUids) && t.helperSession.targetUids.length > 0
+      ? t.helperSession.targetUids
+      : null;
+    const matchedAccounts = hsUids
+      ? findMatchingAccountsForClass(t.courseId, t.classId, hsUids)
+      : findMatchingAccountsForClass(t.courseId, t.classId, null, { onlyAutoSignEnabled: true });
     const targetUids = matchedAccounts.map((a) => a.uid);
+    if (targetUids.length === 0) {
+      sysLog("QR_WATCH", `课程《${t.courseName}》当前无开启自动监测的账号，跳过群二维码自动签到`);
+      continue;
+    }
 
     const record = await executeSignForActive({
       courseId: t.courseId,
@@ -2191,142 +2722,393 @@ async function handleDetectedQrCodeText(qrText, meta = {}) {
 
 // 巡检未完成的签到活动（含手机 App 自己手动签成功、老师后台代签、或其他外部途径签成功），自动触发群聊合并提醒！
 let lastExternalSyncAt = 0;
-async function checkExternalSignCompletions() {
+let isSyncingBounties = false;
+async function checkExternalSignCompletions(options = {}) {
+  const { force = false } = options || {};
   const now = Date.now();
-  if (now - lastExternalSyncAt < 12000) return; // 每 12 秒巡检一次外部签到状态
+  const hasLiveBounties = (store.helperSessions || []).some(
+    (s) => !s.completed && (s.mode === 'sign' || s.mode === 'captcha') && s.expiresAt > now
+  );
+  const minInterval = force ? 0 : (hasLiveBounties ? 3500 : 10000);
+  if (isSyncingBounties || now - lastExternalSyncAt < minInterval) return;
+  isSyncingBounties = true;
   lastExternalSyncAt = now;
 
-  // 收集当前待完成/进行中的活动：未完成的协助会话 + 当前监测到的未全员签完活动
-  const watchMap = new Map(); // activeId -> { courseId, classId, courseName, activeName, signTypeLabel, hsList: [] }
-  for (const hs of store.helperSessions || []) {
-    if (!hs.completed && hs.mode === 'sign' && hs.activeId && hs.expiresAt > now) {
-      const aid = String(hs.activeId);
-      if (!watchMap.has(aid)) {
-        watchMap.set(aid, {
-          activeId: aid,
-          courseId: hs.courseId,
-          classId: hs.classId,
-          courseName: hs.courseName || '课程',
-          activeName: hs.activeName || '课堂签到',
-          signTypeLabel: SIGN_TYPE_LABEL[hs.signType] || hs.signType || '签到',
-          hsList: [],
-        });
-      }
-      watchMap.get(aid).hsList.push(hs);
-    }
-  }
-
-  for (const item of lastDetectedActives || []) {
-    const act = item.active || item;
-    if (act && act.status && act.id) {
-      const aid = String(act.id);
-      if (!watchMap.has(aid)) {
-        watchMap.set(aid, {
-          activeId: aid,
-          courseId: item.courseId,
-          classId: item.classId,
-          courseName: item.courseName || '课程',
-          activeName: act.name || '课堂签到',
-          signTypeLabel: SIGN_TYPE_LABEL[act.signType] || act.signType || '签到',
-          hsList: [],
-        });
-      }
-    }
-  }
-
-  for (const [aid, meta] of watchMap.entries()) {
-    const accounts = findMatchingAccountsForClass(meta.courseId, meta.classId, null);
-    if (accounts.length === 0) continue;
-
-    const notifiedSet = notifiedAttendSuccessMap.get(aid) || new Set();
-    const newlySigned = [];
-    let allSigned = true;
-
-    for (const acc of accounts) {
-      try {
-        const att = await CXProtocol.getAttendInfoWeb(aid, acc.uid);
-        const signed = Number(att?.status ?? 0) === 1;
-        if (signed) {
-          if (!notifiedSet.has(String(acc.uid))) {
-            newlySigned.push(acc);
-          }
-        } else {
-          allSigned = false;
-        }
-      } catch (_) {
-        allSigned = false;
-      }
-    }
-
-    if (newlySigned.length > 0) {
-      markAccountsNotifiedForActive(
-        aid,
-        newlySigned.map((a) => a.uid)
-      );
-      const mergedNames = newlySigned.map((a) => a.name || a.uid).join(' / ');
-      const record = {
-        id: `${aid}_ext_${Date.now()}`,
-        time: new Date().toLocaleString('zh-CN', { hour12: false }),
-        courseId: String(meta.courseId || ''),
-        classId: String(meta.classId || ''),
-        courseName: meta.courseName,
-        activeId: aid,
-        activeName: meta.activeName,
-        signType: 'normal',
-        signTypeLabel: meta.signTypeLabel,
-        triggerSource: '外部/学习通端签到同步',
-        helperShareUrl: null,
-        results: newlySigned.map((a) => ({
-          uid: a.uid,
-          name: a.name || a.uid,
-          ok: true,
-          already: true,
-          msg: '已签到成功',
-        })),
-      };
-
-      store.signHistory = store.signHistory || [];
-      store.signHistory.unshift(record);
-      if (store.signHistory.length > 80) store.signHistory.pop();
-
-      if (allSigned) {
-        for (const hs of meta.hsList) {
+  try {
+    const watchMap = new Map();
+    for (const hs of store.helperSessions || []) {
+      if (!hs.completed && (hs.mode === 'sign' || hs.mode === 'captcha') && hs.activeId) {
+        if (hs.expiresAt <= now) {
           hs.completed = true;
-          hs.lastResult = record;
+          hs.expired = true;
+          hs.closeReason = '协助会话超时';
+          continue;
+        }
+        const aid = String(hs.activeId);
+        if (!watchMap.has(aid)) {
+          watchMap.set(aid, {
+            activeId: aid,
+            courseId: hs.courseId,
+            classId: hs.classId,
+            courseName: hs.courseName || '课程',
+            activeName: hs.activeName || '课堂签到',
+            signType: hs.signType || 'normal',
+            signTypeLabel: hs.signTypeLabel || SIGN_TYPE_LABEL[hs.signType] || hs.signType || '签到',
+            hsList: [],
+          });
+        }
+        watchMap.get(aid).hsList.push(hs);
+      }
+    }
+
+    for (const item of lastDetectedActives || []) {
+      const act = item.active || item;
+      if (act && act.status && act.id) {
+        const aid = String(act.id);
+        if (!watchMap.has(aid)) {
+          watchMap.set(aid, {
+            activeId: aid,
+            courseId: item.courseId,
+            classId: item.classId,
+            courseName: item.courseName || '课程',
+            activeName: act.name || '课堂签到',
+            signType: act.signType || 'normal',
+            signTypeLabel: SIGN_TYPE_LABEL[act.signType] || act.signType || '签到',
+            hsList: [],
+          });
         }
       }
-      saveStore();
-
-      if (store.napcat?.notifyOnComplete !== false) {
-        const msgLines = [
-          `[学习通签到成功] (状态同步)`,
-          `课程：${meta.courseName}`,
-          `活动：${meta.activeName} (${meta.signTypeLabel})`,
-          `签到成功：${mergedNames}`,
-        ];
-        await broadcastNapCatWithRetry(msgLines.join('\n'), {
-          eventType: 'sign_result',
-          dedupKey: `ext_ok_${aid}_${newlySigned.map((a) => a.uid).sort().join(',')}`,
-          eventData: {
-            title: `签到成功《${meta.courseName}》`,
-            targetUids: newlySigned.map((a) => String(a.uid)),
-            targetNames: mergedNames,
-            courseName: meta.courseName,
-            activeName: meta.activeName,
-            signTypeLabel: meta.signTypeLabel,
-            triggerSource: '外部/学习通端签到同步',
-            results: record.results,
-          },
-        });
-      }
-      sysLog('SIGN', `检测到《${meta.courseName}》外部/手动签到成功: ${mergedNames}`, { uids: newlySigned.map((a) => a.uid) });
-    } else if (allSigned && meta.hsList.length > 0) {
-      for (const hs of meta.hsList) {
-        hs.completed = true;
-      }
-      saveStore();
     }
+
+    let storeDirty = false;
+
+    for (const [aid, meta] of watchMap.entries()) {
+      const hsTargetUids = Array.from(
+        new Set((meta.hsList || []).flatMap((hs) => (Array.isArray(hs.targetUids) ? hs.targetUids.map(String) : [])))
+      );
+      const autoEnabledAccounts = findMatchingAccountsForClass(meta.courseId, meta.classId, null, { onlyAutoSignEnabled: true });
+      const hsAccounts = hsTargetUids.length > 0 ? findMatchingAccountsForClass(meta.courseId, meta.classId, hsTargetUids) : [];
+      const mergedAccMap = new Map();
+      for (const a of [...autoEnabledAccounts, ...hsAccounts]) {
+        mergedAccMap.set(String(a.uid), a);
+      }
+      const accounts = Array.from(mergedAccMap.values());
+      const probeUid = accounts[0]?.uid || store.currentUid || store.accounts?.[0]?.uid;
+
+      // 1) 实时探测签到活动在学习通官方是否已截止/过期 -> 秒级下架无效悬赏
+      let stats = null;
+      if (probeUid && meta.courseId && meta.classId) {
+        try {
+          stats = await CXProtocol.getSignAttendStats(aid, meta.courseId, meta.classId, probeUid);
+        } catch (_) {}
+      }
+      const isActivityEnded =
+        Boolean(stats?.isOver) ||
+        (Number(stats?.endTimeMs || 0) > 0 && Date.now() > Number(stats.endTimeMs) + 4000);
+
+      if (stats) {
+        for (const hs of meta.hsList) {
+          hs.signedCount = Number(stats.signedCount || hs.signedCount || 0);
+          hs.totalCount = Number(stats.totalCount || hs.totalCount || 0);
+          if (stats.endTimeMs > 0) hs.endTimeMs = Number(stats.endTimeMs);
+        }
+      }
+
+      if (isActivityEnded) {
+        if (meta.hsList.length > 0) {
+          for (const hs of meta.hsList) {
+            hs.completed = true;
+            hs.expired = true;
+            hs.closeReason = '签到已截止';
+            hs.updatedAt = Date.now();
+          }
+          storeDirty = true;
+        }
+        markActiveFullyCompleted(aid);
+        lastDetectedActives = (lastDetectedActives || []).filter((it) => String((it.active || it)?.id) !== aid);
+        pendingThresholdWatchMap.delete(aid);
+        continue;
+      }
+
+      if (accounts.length === 0) continue;
+
+      // 2) 逐账号同步真实出勤状态 -> 签上的人实时从待签列表和活动监测剔除，全员签完立刻下架悬赏与监测（防重签）
+      const notifiedSet = notifiedAttendSuccessMap.get(aid) || new Set();
+      const newlySigned = [];
+      const currentSignedAccs = [];
+      const currentPendingAccs = [];
+
+      for (const acc of accounts) {
+        try {
+          const att = await CXProtocol.getAttendInfoWeb(aid, acc.uid);
+          const st = Number(att?.status ?? 0);
+          const signed = st === 1 || st === 9;
+          if (signed) {
+            currentSignedAccs.push(acc);
+            if (!notifiedSet.has(String(acc.uid))) {
+              newlySigned.push(acc);
+            }
+          } else {
+            currentPendingAccs.push(acc);
+          }
+        } catch (_) {
+          currentPendingAccs.push(acc);
+        }
+      }
+
+      const allSigned = currentPendingAccs.length === 0 && currentSignedAccs.length > 0;
+
+      for (const hs of meta.hsList) {
+        const hsTargetSet = new Set((hs.targetUids || []).map(String));
+        const hsPending = hsTargetSet.size > 0
+          ? currentPendingAccs.filter((a) => hsTargetSet.has(String(a.uid)))
+          : currentPendingAccs;
+        const hsSigned = hsTargetSet.size > 0
+          ? currentSignedAccs.filter((a) => hsTargetSet.has(String(a.uid)))
+          : currentSignedAccs;
+        const prevPendingKey = (hs.pendingUids || []).join(',');
+        hs.pendingUids = hsPending.map((a) => String(a.uid));
+        hs.pendingNames = hsPending.map((a) => a.name || a.uid);
+        hs.succeededUids = hsSigned.map((a) => String(a.uid));
+        hs.succeededNames = hsSigned.map((a) => a.name || a.uid);
+        if (prevPendingKey !== hs.pendingUids.join(',')) {
+          hs.updatedAt = Date.now();
+          storeDirty = true;
+        }
+        if (hsPending.length === 0 && hsSigned.length > 0) {
+          hs.completed = true;
+          hs.closeReason = '全部已签到完成';
+          hs.updatedAt = Date.now();
+          storeDirty = true;
+        }
+      }
+
+      // 实时同步活动监测列表 (lastDetectedActives)：已全员签完的活动立即移除，未签完的实时更新待签/已签名单
+      if (allSigned) {
+        markActiveFullyCompleted(aid);
+        lastDetectedActives = (lastDetectedActives || []).filter(
+          (it) => String((it.active || it)?.id) !== aid
+        );
+      } else {
+        for (const it of lastDetectedActives || []) {
+          const act = it.active || it;
+          if (String(act?.id) === aid) {
+            if (stats) {
+              act.signedCount = stats.signedCount;
+              act.totalCount = stats.totalCount;
+              act.signRatio = stats.signRatio;
+              if (stats.endTimeMs > 0) act.endTimeMs = stats.endTimeMs;
+            }
+            it.pendingUids = currentPendingAccs.map((a) => String(a.uid));
+            it.pendingNames = currentPendingAccs.map((a) => a.name || a.uid);
+            it.succeededUids = currentSignedAccs.map((a) => String(a.uid));
+            it.succeededNames = currentSignedAccs.map((a) => a.name || a.uid);
+          }
+        }
+      }
+
+      // 若监测到了进行中活动但尚无悬赏卡片且仍有未签完账号，自动补建零延迟悬赏会话防止漏显
+      if (meta.hsList.length === 0 && currentPendingAccs.length > 0) {
+        const activeDetail = (await CXProtocol.getActiveInfoWeb(aid, probeUid).catch(() => null)) || {};
+        const sType = SIGN_TYPE_INDEX_MAP[Number(activeDetail.otherId ?? 0)] || meta.signType || 'normal';
+        const needPhoto = activeDetail.ifphoto === 1 || activeDetail.ifPhoto === 1;
+        const label = needPhoto && sType === 'normal' ? '拍照签到' : (SIGN_TYPE_LABEL[sType] || meta.signTypeLabel || '签到');
+        createHelperSession({
+          mode: 'sign',
+          title: `帮 ${currentPendingAccs.map((a) => a.name || a.uid).join('/')} 签到《${meta.courseName}》(${label})`,
+          courseId: meta.courseId,
+          classId: meta.classId,
+          courseName: meta.courseName,
+          activeId: aid,
+          activeName: meta.activeName,
+          signType: sType,
+          signTypeLabel: label,
+          targetUids: accounts.map((a) => a.uid),
+          targetNames: accounts.map((a) => a.name || a.uid),
+          pendingUids: currentPendingAccs.map((a) => a.uid),
+          pendingNames: currentPendingAccs.map((a) => a.name || a.uid),
+          succeededUids: currentSignedAccs.map((a) => a.uid),
+          succeededNames: currentSignedAccs.map((a) => a.name || a.uid),
+          designatedPlace: activeDetail.locationText || '',
+          locationRange: activeDetail.locationRange ? String(activeDetail.locationRange) : '',
+          needLocation: Boolean(activeDetail.locationText || sType === 'location'),
+          needPhoto,
+          endTimeMs: Number(stats?.endTimeMs || activeDetail.endTime || 0),
+          signedCount: Number(stats?.signedCount || 0),
+          totalCount: Number(stats?.totalCount || 0),
+        });
+        storeDirty = true;
+      }
+
+      if (newlySigned.length > 0) {
+        markAccountsNotifiedForActive(
+          aid,
+          newlySigned.map((a) => a.uid)
+        );
+        const mergedNames = newlySigned.map((a) => a.name || a.uid).join(' / ');
+        const record = {
+          id: `${aid}_ext_${Date.now()}`,
+          time: new Date().toLocaleString('zh-CN', { hour12: false }),
+          courseId: String(meta.courseId || ''),
+          classId: String(meta.classId || ''),
+          courseName: meta.courseName,
+          activeId: aid,
+          activeName: meta.activeName,
+          signType: meta.signType || 'normal',
+          signTypeLabel: meta.signTypeLabel,
+          triggerSource: '外部/学习通端签到同步',
+          helperShareUrl: null,
+          results: newlySigned.map((a) => ({
+            uid: a.uid,
+            name: a.name || a.uid,
+            ok: true,
+            already: true,
+            msg: '已签到成功',
+          })),
+        };
+
+        store.signHistory = store.signHistory || [];
+        store.signHistory.unshift(record);
+        if (store.signHistory.length > 80) store.signHistory.pop();
+
+        if (allSigned) {
+          for (const hs of meta.hsList) {
+            hs.completed = true;
+            hs.lastResult = record;
+          }
+        }
+        storeDirty = true;
+
+        pushRealtimeSignAlert({
+          eventType: 'sign_success',
+          title: `✅ 签到成功：《${meta.courseName}》`,
+          body: `${meta.activeName} (${meta.signTypeLabel}) · 已确认签上：${mergedNames}`,
+          courseId: meta.courseId,
+          classId: meta.classId,
+          courseName: meta.courseName,
+          activeId: aid,
+          activeName: meta.activeName,
+          signType: meta.signType || 'normal',
+          signTypeLabel: meta.signTypeLabel,
+          targetUids: newlySigned.map((a) => a.uid),
+          targetNames: newlySigned.map((a) => a.name || a.uid),
+          urgent: false,
+          dedupKey: `ext_alert_ok_${aid}_${newlySigned.map((a) => a.uid).sort().join(',')}`,
+        });
+
+        if (store.napcat?.notifyOnComplete !== false) {
+          const msgLines = [
+            `[学习通签到成功] (状态同步)`,
+            `课程：${meta.courseName}`,
+            `活动：${meta.activeName} (${meta.signTypeLabel})`,
+            `签到成功：${mergedNames}`,
+          ];
+          await broadcastNapCatWithRetry(msgLines.join('\n'), {
+            eventType: 'sign_result',
+            dedupKey: `ext_ok_${aid}_${newlySigned.map((a) => a.uid).sort().join(',')}`,
+            eventData: {
+              title: `签到成功《${meta.courseName}》`,
+              targetUids: newlySigned.map((a) => String(a.uid)),
+              targetNames: mergedNames,
+              courseName: meta.courseName,
+              activeName: meta.activeName,
+              signTypeLabel: meta.signTypeLabel,
+              triggerSource: '外部/学习通端签到同步',
+              results: record.results,
+            },
+          });
+        }
+        sysLog('SIGN', `检测到《${meta.courseName}》外部/手动签到成功: ${mergedNames}`, { uids: newlySigned.map((a) => a.uid) });
+      }
+    }
+
+    if (storeDirty) saveStore();
+  } finally {
+    isSyncingBounties = false;
   }
+}
+
+async function syncActiveBountiesNow(options = {}) {
+  await checkExternalSignCompletions({ force: Boolean(options.force) });
+}
+
+function getActiveBountiesForUser({ myCourseIds = new Set(), myClassIds = new Set(), myCourseNames = new Set(), myOwnedUids = [] } = {}) {
+  const now = Date.now();
+  const baseUrl = getPublicBaseUrlClean();
+  const ownedSet = new Set((myOwnedUids || []).map(String));
+  const rawList = (store.helperSessions || []).filter((hs) => {
+    if (!hs || hs.completed || hs.expired) return false;
+    if (hs.mode !== 'sign' && hs.mode !== 'captcha') return false;
+    if (hs.expiresAt <= now) return false;
+    if (hs.endTimeMs && hs.endTimeMs > 0 && now > hs.endTimeMs + 4000) return false;
+    const pend = Array.isArray(hs.pendingUids) ? hs.pendingUids : (hs.targetUids || []);
+    if (pend.length === 0) return false;
+    return true;
+  });
+
+  // 按 activeId 去重（只保留最新一条活跃悬赏）
+  const seenActive = new Set();
+  const list = [];
+  for (const hs of rawList) {
+    const aid = String(hs.activeId || hs.token);
+    if (seenActive.has(aid)) continue;
+    seenActive.add(aid);
+
+    const pendingUids = Array.isArray(hs.pendingUids) ? hs.pendingUids.map(String) : (hs.targetUids || []).map(String);
+    const pendingNames = Array.isArray(hs.pendingNames) && hs.pendingNames.length > 0
+      ? hs.pendingNames
+      : pendingUids.map((u) => (store.accounts || []).find((a) => String(a.uid) === u)?.name || u);
+    const succeededUids = Array.isArray(hs.succeededUids) ? hs.succeededUids.map(String) : [];
+    const succeededNames = Array.isArray(hs.succeededNames) ? hs.succeededNames : [];
+
+    const isMyCourse =
+      (hs.classId && myClassIds.has(String(hs.classId))) ||
+      (hs.courseId && myCourseIds.has(String(hs.courseId))) ||
+      (hs.courseName && myCourseNames.has(String(hs.courseName))) ||
+      pendingUids.some((u) => ownedSet.has(u));
+    const includesMe = pendingUids.some((u) => ownedSet.has(u));
+
+    list.push({
+      token: hs.token,
+      mode: hs.mode,
+      title: hs.title,
+      courseId: hs.courseId,
+      classId: hs.classId,
+      courseName: hs.courseName || '未知课程',
+      activeId: hs.activeId,
+      activeName: hs.activeName || '课堂签到',
+      signType: hs.signType || 'normal',
+      signTypeLabel: hs.signTypeLabel || SIGN_TYPE_LABEL[hs.signType] || hs.signType || '签到',
+      designatedPlace: hs.designatedPlace || '',
+      locationRange: hs.locationRange || '',
+      needLocation: Boolean(hs.needLocation || hs.designatedPlace || hs.signType === 'location'),
+      needPhoto: Boolean(hs.needPhoto || hs.signType === 'photo'),
+      waitingThreshold: Boolean(hs.waitingThreshold),
+      targetUids: hs.targetUids || [],
+      targetNames: hs.targetNames || [],
+      pendingUids,
+      pendingNames,
+      succeededUids,
+      succeededNames,
+      signedCount: Number(hs.signedCount || 0),
+      totalCount: Number(hs.totalCount || 0),
+      endTimeMs: Number(hs.endTimeMs || 0),
+      createdAt: Number(hs.createdAt || now),
+      updatedAt: Number(hs.updatedAt || hs.createdAt || now),
+      expiresAt: Number(hs.expiresAt || now + 1800000),
+      shareUrl: `${baseUrl}/?help=${hs.token}`,
+      isMyCourse: Boolean(isMyCourse),
+      includesMe: Boolean(includesMe),
+    });
+  }
+
+  // 排序优先级：1) 包含我本人未签 -> 2) 同课程悬赏 -> 3) 最新更新时间
+  list.sort((a, b) => {
+    if (a.includesMe !== b.includesMe) return a.includesMe ? -1 : 1;
+    if (a.isMyCourse !== b.isMyCourse) return a.isMyCourse ? -1 : 1;
+    return (b.updatedAt || 0) - (a.updatedAt || 0);
+  });
+  return list;
 }
 
 async function processIncomingChatImageItem(img) {
@@ -2385,7 +3167,7 @@ async function pollGroupQrImagesOnce() {
     await checkExternalSignCompletions();
 
     const cfg = store.napcat || {};
-    const groups = (cfg.groups || cfg.groupIds || []).map((g) => String(g).trim()).filter(Boolean);
+    const groups = normalizeConfiguredGroups(cfg.groups || cfg.groupIds || []);
     const since = Date.now() - 12 * 60 * 1000; // 检查最近 12 分钟内的群图片（不再受 inClass 门禁死锁）
 
     const imageCandidates = [];
@@ -2482,6 +3264,14 @@ async function tickProtectedActivesWatcher() {
 
       if (stats.isOver) {
         pendingThresholdWatchMap.delete(aid);
+        for (const hs of store.helperSessions || []) {
+          if (!hs.completed && String(hs.activeId) === String(aid)) {
+            hs.completed = true;
+            hs.expired = true;
+            hs.closeReason = '签到已截止';
+          }
+        }
+        saveStore();
         if (task.activeRef) task.activeRef.waitingThreshold = false;
         sysLog(
           'PROTECT',
@@ -2601,11 +3391,19 @@ function restartScheduler(triggerImmediate = true) {
 module.exports = {
   decodeQrFromImageBuffer,
   broadcastNapCat,
+  getPublicBaseUrlClean,
   createHelperSession,
   getHelperSession,
+  pushRealtimeSignAlert,
+  creditHelperPointsToStudent,
+  claimHelperPointsByToken,
+  getFormattedLeaderboard,
+  syncActiveBountiesNow,
+  getActiveBountiesForUser,
   solveSlideCaptchaX,
   autoSolveSlideCaptcha,
   executeSignForActive,
+  isAccountAutoSignEnabledForCourse,
   findMatchingAccountsForClass,
   handleDetectedQrCodeText,
   processIncomingChatImageItem,

@@ -9,8 +9,8 @@
     <AssemblyName>ISHIT</AssemblyName>
     <RootNamespace>ISHIT.Desktop</RootNamespace>
     <ApplicationIcon>app.ico</ApplicationIcon>
-    <Version>0.0.0-beta</Version>
-    <InformationalVersion>beta</InformationalVersion>
+    <Version>0.1.0</Version>
+    <InformationalVersion>0.1</InformationalVersion>
     <Product>ISHIT</Product>
     <Company>ISHIT</Company>
     <PlatformTarget>AnyCPU</PlatformTarget>

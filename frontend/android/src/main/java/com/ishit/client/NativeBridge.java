@@ -25,6 +25,16 @@ public class NativeBridge {
     }
 
     @JavascriptInterface
+    public void showNotification(String title, String body, String payloadJson) {
+        act.postNativeNotification(title, body, payloadJson);
+    }
+
+    @JavascriptInterface
+    public void requestNotifyPermission() {
+        act.requestNotificationPermissionExplicit();
+    }
+
+    @JavascriptInterface
     public void onBackEvalResult(String val) {
         act.runOnUiThread(new BackResultRunnable(act, val));
     }

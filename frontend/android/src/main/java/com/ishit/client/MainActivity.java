@@ -3,7 +3,12 @@ package com.ishit.client;
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.content.ClipData;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
@@ -22,7 +27,6 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
-import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -30,11 +34,14 @@ import java.util.List;
 public class MainActivity extends Activity {
     public static final int FILE_CHOOSER_REQ_CODE = 1001;
     public static final int RUNTIME_PERM_REQ_CODE = 1002;
+    public static final String NOTIFY_CHANNEL_ID = "ishit_sign_channel";
     public static final String LOCAL_ASSET_INDEX = "file:///android_asset/web/index.html";
     public static final String DEFAULT_CONFIG_JSON = "{\n  \"serverHost\": \"47.117.27.75\",\n  \"serverPort\": 80,\n  \"apiBaseUrl\": \"http://47.117.27.75\",\n  \"httpsApiBaseUrl\": \"https://appraisal-occurring-performance-phrase.trycloudflare.com\",\n  \"directIpUrl\": \"http://47.117.27.75\"\n}";
 
     public WebView webView;
     public ValueCallback<Uri[]> filePathCallback;
+    public String pendingNotifyPayload = null;
+    private int notifySeq = 2000;
 
     @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
     @Override
@@ -47,8 +54,17 @@ public class MainActivity extends Activity {
             window.getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
         }
 
+        ensureNotificationChannel();
         loadOrCreateExternalConfigJson();
         requestNecessaryPermissions();
+
+        Intent startIntent = getIntent();
+        if (startIntent != null) {
+            String initPayload = startIntent.getStringExtra("notify_payload");
+            if (initPayload != null && !initPayload.isEmpty()) {
+                pendingNotifyPayload = initPayload;
+            }
+        }
 
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.parseColor("#F4F4F6"));
@@ -84,6 +100,115 @@ public class MainActivity extends Activity {
         setContentView(root);
 
         webView.loadUrl(LOCAL_ASSET_INDEX);
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (intent != null) {
+            String payload = intent.getStringExtra("notify_payload");
+            if (payload != null && !payload.isEmpty()) {
+                pendingNotifyPayload = payload;
+                flushPendingNotifyPayload();
+            }
+        }
+    }
+
+    public void flushPendingNotifyPayload() {
+        if (pendingNotifyPayload == null || pendingNotifyPayload.isEmpty() || webView == null) {
+            return;
+        }
+        final String raw = pendingNotifyPayload;
+        pendingNotifyPayload = null;
+        String jsLiteral = toJsStringLiteral(raw);
+        webView.evaluateJavascript(
+            "if(window.onNativeNotificationClick)window.onNativeNotificationClick(" + jsLiteral + ");",
+            null
+        );
+    }
+
+    public static String toJsStringLiteral(String s) {
+        if (s == null) return "\"\"";
+        StringBuilder sb = new StringBuilder(s.length() + 16);
+        sb.append('"');
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '\\': sb.append("\\\\"); break;
+                case '"': sb.append("\\\""); break;
+                case '\r': sb.append("\\r"); break;
+                case '\n': sb.append("\\n"); break;
+                case '\t': sb.append("\\t"); break;
+                default: sb.append(c); break;
+            }
+        }
+        sb.append('"');
+        return sb.toString();
+    }
+
+    private void ensureNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                if (nm != null) {
+                    NotificationChannel ch = new NotificationChannel(
+                        NOTIFY_CHANNEL_ID,
+                        "ISHIT 课堂签到通知",
+                        NotificationManager.IMPORTANCE_HIGH
+                    );
+                    ch.setDescription("发现课堂签到、签到成功或签到失败时立即提醒并直达");
+                    ch.enableVibration(true);
+                    nm.createNotificationChannel(ch);
+                }
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    public void postNativeNotification(String title, String body, String payloadJson) {
+        try {
+            ensureNotificationChannel();
+            NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm == null) return;
+
+            int id = ++notifySeq;
+            Intent clickIntent = new Intent(this, MainActivity.class);
+            clickIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            clickIntent.putExtra("notify_payload", payloadJson != null ? payloadJson : "");
+
+            int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                flags |= PendingIntent.FLAG_IMMUTABLE;
+            }
+            PendingIntent pi = PendingIntent.getActivity(this, id, clickIntent, flags);
+
+            Notification.Builder builder;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                builder = new Notification.Builder(this, NOTIFY_CHANNEL_ID);
+            } else {
+                builder = new Notification.Builder(this);
+                builder.setPriority(Notification.PRIORITY_HIGH);
+                builder.setDefaults(Notification.DEFAULT_ALL);
+            }
+
+            builder.setSmallIcon(R.drawable.ic_launcher)
+                .setContentTitle(title != null && !title.isEmpty() ? title : "ISHIT 签到提醒")
+                .setContentText(body != null && !body.isEmpty() ? body : "点击直达签到或悬赏大厅")
+                .setAutoCancel(true)
+                .setContentIntent(pi);
+
+            nm.notify(id, builder.build());
+        } catch (Exception ignored) {
+        }
+    }
+
+    public void requestNotificationPermissionExplicit() {
+        if (Build.VERSION.SDK_INT >= 33) {
+            if (checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, RUNTIME_PERM_REQ_CODE);
+            }
+        }
     }
 
     public String loadOrCreateExternalConfigJson() {
@@ -127,11 +252,13 @@ public class MainActivity extends Activity {
 
     private void requestNecessaryPermissions() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            String[] perms = new String[]{
-                Manifest.permission.CAMERA,
-                Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.ACCESS_COARSE_LOCATION
-            };
+            List<String> perms = new ArrayList<String>();
+            perms.add(Manifest.permission.CAMERA);
+            perms.add(Manifest.permission.ACCESS_FINE_LOCATION);
+            perms.add(Manifest.permission.ACCESS_COARSE_LOCATION);
+            if (Build.VERSION.SDK_INT >= 33) {
+                perms.add("android.permission.POST_NOTIFICATIONS");
+            }
             List<String> need = new ArrayList<String>();
             for (String p : perms) {
                 if (checkSelfPermission(p) != PackageManager.PERMISSION_GRANTED) {
@@ -193,4 +320,3 @@ public class MainActivity extends Activity {
         super.onBackPressed();
     }
 }
-

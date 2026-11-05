@@ -155,6 +155,9 @@ const defaultStore = {
   handledActiveKeys: [],
   signHistory: [],
   helperSessions: [],
+  helperLeaderboard: {},
+  helperClaims: {},
+  recentAlerts: [],
   pendingCaptchas: {},
   schedule: {
     masterEnabled: true,
@@ -189,6 +192,9 @@ if (fs.existsSync(STORE_FILE)) {
       ...defaultStore,
       ...loaded,
       userProfiles: loaded.userProfiles || {},
+      helperLeaderboard: loaded.helperLeaderboard || {},
+      helperClaims: loaded.helperClaims || {},
+      recentAlerts: Array.isArray(loaded.recentAlerts) ? loaded.recentAlerts.slice(0, 80) : [],
       locationPresets: Array.isArray(loaded.locationPresets) && loaded.locationPresets.length > 0
         ? loaded.locationPresets
         : defaultStore.locationPresets,

@@ -10,6 +10,14 @@ const state = {
   currentCaptchaKey: null,
   helperToken: null,
   helperSession: null,
+  helperLoggedIn: false,
+  helperPrimaryAccount: null,
+  inAppHelperReturn: false,
+  inAppReturnModule: 'bounty',
+  seenAlertIds: new Set(),
+  initialAlertsSeeded: false,
+  currentLiveAlert: null,
+  lastPollIntervalMs: 5000,
   mainMap: null,
   mainMarker: null,
   modalMap: null,
@@ -448,6 +456,10 @@ function switchMainModule(mod) {
     if (mod === 'global') {
       hintEl.textContent = '仪表盘';
       updateWinTopbarTitle('实时仪表盘');
+    } else if (mod === 'bounty') {
+      hintEl.textContent = '实时签到悬赏雷达 · 签到大师排行榜';
+      updateWinTopbarTitle('签到悬赏与大师榜');
+      updateNotifyPermButtonText();
     } else if (mod === 'user') {
       const curAcc = (state.status?.accounts || []).find((a) => String(a.uid) === String(state.selectedUid));
       hintEl.textContent = curAcc ? `当前配置账号：${curAcc.name} (${curAcc.uid})` : '按账号独立配置课程、课表与专属位置';
@@ -498,6 +510,8 @@ function switchSettingsSubTab(sub) {
 function switchTab(tab) {
   if (tab === 'overview' || tab === 'global') {
     switchMainModule('global');
+  } else if (tab === 'bounty') {
+    switchMainModule('bounty');
   } else if (tab === 'courses') {
     switchUserSubTab('courses');
   } else if (tab === 'schedule') {
@@ -532,8 +546,8 @@ function enterAdminPanel() {
   document.getElementById('helperApp').style.display = 'none';
   document.getElementById('adminApp').style.display = '';
   refreshStatus(true);
-  if (state.statusPollTimer) clearInterval(state.statusPollTimer);
-  state.statusPollTimer = setInterval(() => refreshStatus(false), 5000);
+  scheduleAdaptiveStatusPolling(3500);
+  updateNotifyPermButtonText();
 }
 
 async function submitPanelLogin() {
@@ -768,6 +782,9 @@ async function refreshStatus(syncInputs = false) {
     renderTopStatus(data);
     renderUserSwitcher(data);
     renderOverview(data, syncInputs);
+    renderBountyAndLeaderboard(data);
+    processRealtimeSignAlerts(data);
+    adjustAdaptivePollingFromData(data);
     renderCoursesList(state.courses);
     renderAccountsList(data.accounts || [], data.currentUid);
     renderLocationPresets(data.locationPresets || []);
@@ -860,11 +877,11 @@ function renderOverview(data, syncInputs) {
     capSec.style.display = 'none';
   }
 
-  // 活动监测列表
+  // 活动监测列表（与签到悬赏池双向 SSOT 高同步，已签/截止实时剔除防重签）
   const radarEl = document.getElementById('activeRadarList');
   const actives = data.lastDetectedActives || [];
   if (actives.length === 0) {
-    radarEl.innerHTML = `<div class="empty">暂无签到活动</div>`;
+    radarEl.innerHTML = `<div class="empty">暂无待处理签到活动（已签或截止活动自动下榜防重签）</div>`;
   } else {
     radarEl.innerHTML = actives
       .map((item) => {
@@ -872,10 +889,24 @@ function renderOverview(data, syncInputs) {
         const signedNum = act.signedCount ?? act.attendNum ?? 0;
         const totalNum = act.totalCount || 0;
         const ratioStr = totalNum > 0
-          ? `已签: ${signedNum}/${totalNum} 人 (${Math.round((signedNum / totalNum) * 100)}%)`
-          : `已签: ${signedNum} 人`;
+          ? `班级已签: ${signedNum}/${totalNum} 人 (${Math.round((signedNum / totalNum) * 100)}%)`
+          : `班级已签: ${signedNum} 人`;
         const waitBadge = act.waitingThreshold
-          ? `<span class="tag" style="margin-left:6px;">等待人数达标(${Math.round((act.thresholdRatio || 0.3) * 100)}%)</span>`
+          ? `<span class="tag" style="margin-left:6px; background:#fef3c7; color:#92400e; border-color:#fde68a;">⏳ 等待达标(${Math.round((act.thresholdRatio || 0.3) * 100)}%)</span>`
+          : '';
+        const remainSec = act.endTimeMs && act.endTimeMs > Date.now()
+          ? Math.max(0, Math.round((act.endTimeMs - Date.now()) / 1000))
+          : null;
+        const remainBadge = remainSec !== null
+          ? `<span class="tag" style="margin-left:6px; color:#dc2626; border-color:#fecaca;">⏱ 剩余 ${remainSec >= 60 ? Math.floor(remainSec / 60) + '分' + (remainSec % 60) + '秒' : remainSec + '秒'}</span>`
+          : '';
+        const pendingNames = Array.isArray(item.pendingNames) ? item.pendingNames : [];
+        const succeededNames = Array.isArray(item.succeededNames) ? item.succeededNames : [];
+        const pillsHtml = (pendingNames.length > 0 || succeededNames.length > 0)
+          ? `<div class="bounty-student-pills">
+              ${pendingNames.map((n) => `<span class="student-pill pending">⏳ 待签: ${escapeHtml(n)}</span>`).join('')}
+              ${succeededNames.map((n) => `<span class="student-pill done">✅ 已签: ${escapeHtml(n)}</span>`).join('')}
+            </div>`
           : '';
         const ctx = {
           courseId: item.courseId,
@@ -889,15 +920,20 @@ function renderOverview(data, syncInputs) {
           signedCount: signedNum,
           totalCount: totalNum,
         };
+        const directHelpBtn = item.helperToken
+          ? `<button class="btn btn-sm" onclick="openInAppBountyAssist('${escapeHtml(item.helperToken)}', 'global')">⚡ 极速帮签</button>`
+          : `<button class="btn btn-sm" onclick='openManualSignModal(${JSON.stringify(ctx).replace(/'/g, "&#39;")})'>签到</button>`;
         return `
-      <div class="list-row">
-        <div>
-          <div style="font-weight:500;">${escapeHtml(ctx.courseName)} · ${escapeHtml(ctx.name)}${waitBadge}</div>
-          <div style="font-size:11px; color:var(--muted);">类型: ${escapeHtml(ctx.signTypeName)} | ${escapeHtml(ratioStr)} | 状态: ${act.status ? '进行中' : '已结束'}</div>
+      <div class="list-row" style="align-items:flex-start;">
+        <div style="flex:1; min-width:0;">
+          <div style="font-weight:600;">${escapeHtml(ctx.courseName)} · ${escapeHtml(ctx.name)}${waitBadge}${remainBadge}</div>
+          <div style="font-size:11px; color:var(--muted); margin-top:2px;">类型: ${escapeHtml(ctx.signTypeName)} | ${escapeHtml(ratioStr)} | ⚡ 实时同步中</div>
+          ${pillsHtml}
         </div>
-        <div class="row">
-          <button class="btn btn-sm" onclick='openManualSignModal(${JSON.stringify(ctx).replace(/'/g, "&#39;")})'>签到</button>
-          <button class="btn btn-ghost btn-sm" onclick='openHelperCreateModal(${JSON.stringify({ mode: "sign", courseId: ctx.courseId, classId: ctx.classId, cpi: ctx.cpi, courseName: ctx.courseName, activeId: ctx.id, activeName: ctx.name, signType: ctx.signType }).replace(/'/g, "&#39;")})'>协助</button>
+        <div class="row" style="flex-shrink:0;">
+          ${directHelpBtn}
+          ${item.helperToken ? `<button class="btn btn-ghost btn-sm" onclick='openManualSignModal(${JSON.stringify(ctx).replace(/'/g, "&#39;")})'>弹窗签</button>` : ''}
+          <button class="btn btn-ghost btn-sm" onclick='openHelperCreateModal(${JSON.stringify({ mode: "sign", courseId: ctx.courseId, classId: ctx.classId, cpi: ctx.cpi, courseName: ctx.courseName, activeId: ctx.id, activeName: ctx.name, signType: ctx.signType }).replace(/'/g, "&#39;")})'>分享链接</button>
         </div>
       </div>`;
       })
@@ -3030,39 +3066,549 @@ async function confirmCreateHelperLink() {
   }
 }
 
-async function initHelperMode(token) {
-  document.getElementById('adminApp').style.display = 'none';
-  document.getElementById('helperApp').style.display = 'block';
-  const res = await api(`/api/helper/info?token=${encodeURIComponent(token)}`);
-  if (!res.ok) {
-    document.getElementById('helpTitle').textContent = res.msg || '协助链接已失效';
+function scheduleAdaptiveStatusPolling(intervalMs = 5000) {
+  const targetMs = Math.max(2500, Number(intervalMs || 5000));
+  if (state.statusPollTimer && state.lastPollIntervalMs === targetMs) return;
+  if (state.statusPollTimer) clearInterval(state.statusPollTimer);
+  state.lastPollIntervalMs = targetMs;
+  state.statusPollTimer = setInterval(() => {
+    if (document.getElementById('adminApp')?.style.display !== 'none') {
+      refreshStatus(false);
+    }
+  }, targetMs);
+}
+
+function adjustAdaptivePollingFromData(data) {
+  const activeTab = document.querySelector('#mainModuleTabs .tab-btn.active')?.getAttribute('data-main');
+  const hasBounties = Array.isArray(data?.bounties) && data.bounties.length > 0;
+  const hasActives = Array.isArray(data?.lastDetectedActives) && data.lastDetectedActives.length > 0;
+  if (activeTab === 'bounty' || hasBounties || hasActives) {
+    scheduleAdaptiveStatusPolling(3000);
+  } else {
+    scheduleAdaptiveStatusPolling(5000);
+  }
+}
+
+async function forceSyncBountyBoard() {
+  const btn = document.getElementById('forceSyncBountyBtn');
+  const tag = document.getElementById('bountySyncStatusTag');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '🔄 同步中...';
+  }
+  if (tag) tag.textContent = '⚡ 正在向学习通校验最新状态...';
+  try {
+    await api('/api/bounties/sync', 'POST', {});
+    await refreshStatus(false);
+    showToast('已与学习通实时同步（已签与截止活动已剔除）');
+  } catch (e) {
+    showToast('同步请求完成');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '🔄 立即同步状态';
+    }
+    if (tag) tag.textContent = '⚡ 3.5s 实时高同步';
+  }
+}
+
+function renderBountyAndLeaderboard(data) {
+  const bounties = Array.isArray(data.bounties) ? data.bounties : [];
+  const leaderboard = Array.isArray(data.leaderboard) ? data.leaderboard : [];
+
+  ['winBountyBadge', 'webBountyBadge', 'androidBountyBadge'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (bounties.length > 0) {
+      el.style.display = 'inline-flex';
+      el.textContent = String(bounties.length);
+    } else {
+      el.style.display = 'none';
+    }
+  });
+
+  const countTag = document.getElementById('bountyActiveCountTag');
+  if (countTag) countTag.textContent = `${bounties.length} 个进行中悬赏`;
+  const lbTag = document.getElementById('leaderboardCountTag');
+  if (lbTag) lbTag.textContent = `${leaderboard.length} 位签到大师`;
+
+  const bountyBox = document.getElementById('bountyBoardList');
+  if (bountyBox) {
+    if (bounties.length === 0) {
+      bountyBox.innerHTML = `<div class="empty" style="padding:28px 14px;">🎉 当前暂无待求助的未完成签到<br/><span style="font-size:11px; color:var(--muted);">一旦有二维码/手势/位置/滑块签到，或尚未签上的课堂活动，将在此秒级置顶展示</span></div>`;
+    } else {
+      bountyBox.innerHTML = bounties
+        .map((b) => {
+          const cardCls = b.includesMe
+            ? 'bounty-card bounty-mine'
+            : b.isMyCourse
+            ? 'bounty-card bounty-my-course'
+            : 'bounty-card';
+          const priorityBadge = b.includesMe
+            ? `<span class="tag bounty-badge-urgent">🔥 本人待签</span>`
+            : b.isMyCourse
+            ? `<span class="tag bounty-badge-course">⭐ 同课程优先</span>`
+            : `<span class="tag">全站互助</span>`;
+          const typeLabel = SIGN_TYPE_LABELS[b.signType] || b.signType || '课堂签到';
+          const statsStr = b.totalCount > 0
+            ? `班级已签 ${b.signedCount || 0}/${b.totalCount} 人`
+            : b.signedCount > 0
+            ? `班级已签 ${b.signedCount} 人`
+            : '等待现场信息';
+          const remainSec = b.endTimeMs && b.endTimeMs > Date.now()
+            ? Math.max(0, Math.round((b.endTimeMs - Date.now()) / 1000))
+            : null;
+          const remainHtml = remainSec !== null
+            ? `<span class="tag" style="color:#dc2626; border-color:#fecaca;">⏱ 剩余 ${remainSec >= 60 ? Math.floor(remainSec / 60) + '分' + (remainSec % 60) + '秒' : remainSec + '秒'}</span>`
+            : '';
+          const placeHtml = b.designatedPlace
+            ? `<div style="font-size:12px; color:#b45309; margin-top:4px; font-weight:600;">📍 要求位置：${escapeHtml(b.designatedPlace)}${b.locationRange ? `（${escapeHtml(String(b.locationRange))}m内）` : ''}</div>`
+            : '';
+          const reasonHtml = b.failReason
+            ? `<div style="font-size:12px; color:var(--muted); margin-top:3px;">💬 求助说明：${escapeHtml(b.failReason)}</div>`
+            : '';
+          const pendingNames = Array.isArray(b.pendingNames) ? b.pendingNames : [];
+          const succeededNames = Array.isArray(b.succeededNames) ? b.succeededNames : [];
+          const fullShareUrl = b.shareUrl && b.shareUrl.startsWith('http')
+            ? b.shareUrl
+            : `${location.origin}/?help=${encodeURIComponent(b.token)}`;
+
+          return `
+          <div class="${cardCls}">
+            <div class="row" style="justify-content:space-between; align-items:flex-start; gap:8px;">
+              <div>
+                <div class="row" style="gap:6px; align-items:center; flex-wrap:wrap;">
+                  ${priorityBadge}
+                  <span class="tag solid">${escapeHtml(typeLabel)}</span>
+                  ${remainHtml}
+                </div>
+                <div style="font-weight:700; font-size:15px; margin-top:6px;">《${escapeHtml(b.courseName || '未知课程')}》 · ${escapeHtml(b.activeName || '课堂签到')}</div>
+                <div style="font-size:11px; color:var(--muted); margin-top:2px;">${escapeHtml(statsStr)} · 悬赏分值：+${pendingNames.length || 1} 分</div>
+                ${placeHtml}
+                ${reasonHtml}
+              </div>
+            </div>
+            <div class="bounty-student-pills">
+              ${pendingNames.map((n) => `<span class="student-pill pending">⏳ 待签: ${escapeHtml(n)}</span>`).join('')}
+              ${succeededNames.map((n) => `<span class="student-pill done">✅ 已签: ${escapeHtml(n)}</span>`).join('')}
+            </div>
+            <div class="row" style="margin-top:10px; gap:8px; flex-wrap:wrap;">
+              <button type="button" class="btn btn-sm" style="flex:2; min-height:36px; font-weight:700;" onclick="openInAppBountyAssist('${escapeHtml(b.token)}', 'bounty')">⚡ 立即帮签（成功得 +${pendingNames.length || 1} 分）</button>
+              <button type="button" class="btn btn-ghost btn-sm" style="flex:1; min-height:36px;" onclick="copyTextValue('${escapeHtml(fullShareUrl)}', '互助链接已复制，可发给同学')">📋 复制求助链接</button>
+            </div>
+          </div>`;
+        })
+        .join('');
+    }
+  }
+
+  const lbBox = document.getElementById('masterLeaderboardList');
+  if (lbBox) {
+    if (leaderboard.length === 0) {
+      lbBox.innerHTML = `<div class="empty" style="padding:28px 14px;">🏆 虚位以待！帮他人完成签到即可荣登签到大师榜<br/><span style="font-size:11px; color:var(--muted);">每成功帮签 1 人次计 +1 分（支持登录主账号自动加分，或未登录事后填写名称+学号认领）</span></div>`;
+    } else {
+      lbBox.innerHTML = leaderboard
+        .map((item, idx) => {
+          const rank = item.rank || idx + 1;
+          const rankCls = rank <= 3 ? `leaderboard-rank rank-${rank}` : 'leaderboard-rank';
+          const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : String(rank);
+          const avatarHtml = item.avatar
+            ? `<img src="${escapeHtml(item.avatar)}" class="leaderboard-avatar" alt="" onerror="this.style.display='none'" />`
+            : `<div class="leaderboard-avatar" style="display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;">${escapeHtml((item.displayName || '侠').slice(0, 1))}</div>`;
+          const aliases = Array.isArray(item.names) && item.names.length > 1
+            ? `<div style="font-size:11px; color:var(--muted); margin-top:2px;">曾用称号：${item.names.map((n) => escapeHtml(n)).join(' / ')}</div>`
+            : '';
+          const cxMeta = [
+            item.cxName ? `学习通：${item.cxName}` : '',
+            item.studentId ? `学号：${item.studentId}` : '',
+            item.school ? item.school : '',
+          ]
+            .filter(Boolean)
+            .join(' · ');
+          const lastDesc = item.lastCourseName ? `最近帮签：《${item.lastCourseName}》` : '';
+
+          return `
+          <div class="leaderboard-row">
+            <div class="row" style="gap:10px; align-items:center; min-width:0; flex:1;">
+              <span class="${rankCls}">${medal}</span>
+              ${avatarHtml}
+              <div style="min-width:0; flex:1;">
+                <div style="font-weight:700; font-size:14px;">${escapeHtml(item.displayName || item.cxName || '热心同学')}</div>
+                <div style="font-size:11px; color:var(--muted);">${escapeHtml(cxMeta || '匿名大侠')}</div>
+                ${aliases}
+                ${lastDesc ? `<div style="font-size:11px; color:var(--muted);">${escapeHtml(lastDesc)}</div>` : ''}
+              </div>
+            </div>
+            <div class="leaderboard-score-box">
+              <div class="leaderboard-score-num">+${Number(item.score || 0)} 分</div>
+              <div style="font-size:11px; color:var(--muted);">成功帮签 ${Number(item.score || 0)} 人次</div>
+            </div>
+          </div>`;
+        })
+        .join('');
+    }
+  }
+}
+
+function copyTextValue(text, toastMsg = '已复制到剪贴板') {
+  try {
+    if (window.IshitAndroidBridge && typeof window.IshitAndroidBridge.copyToClipboard === 'function') {
+      window.IshitAndroidBridge.copyToClipboard(String(text));
+      showToast(toastMsg);
+      return;
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(String(text)).then(() => showToast(toastMsg)).catch(() => {});
+      return;
+    }
+  } catch (_) {}
+  const ta = document.createElement('textarea');
+  ta.value = String(text);
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand('copy');
+  ta.remove();
+  showToast(toastMsg);
+}
+
+function playSignAlertSound(eventType = 'sign_detected') {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const now = ctx.currentTime;
+    const notes =
+      eventType === 'sign_success'
+        ? [523.25, 659.25, 783.99]
+        : eventType === 'sign_failed'
+        ? [880, 440, 880]
+        : [587.33, 880];
+    notes.forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = eventType === 'sign_failed' ? 'sawtooth' : 'sine';
+      osc.frequency.setValueAtTime(freq, now + idx * 0.13);
+      gain.gain.setValueAtTime(0.14, now + idx * 0.13);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.13 + 0.12);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + idx * 0.13);
+      osc.stop(now + idx * 0.13 + 0.125);
+    });
+  } catch (_) {}
+}
+
+function updateNotifyPermButtonText() {
+  const btn = document.getElementById('notifyPermBtn');
+  if (!btn) return;
+  const plat = detectPlatformType();
+  if (plat === 'windows' || plat === 'android') {
+    btn.textContent = '🔔 原生通知已就绪';
     return;
   }
+  if (!('Notification' in window)) {
+    btn.textContent = '🔔 页内横幅+声音提醒已启用';
+    return;
+  }
+  if (Notification.permission === 'granted') {
+    btn.textContent = '🔔 系统通知已开启';
+  } else if (Notification.permission === 'denied') {
+    btn.textContent = '🔕 浏览器通知被禁（已启用横幅+音效）';
+  } else {
+    btn.textContent = '🔔 点击开启浏览器系统通知';
+  }
+}
+
+async function requestCrossPlatformNotificationPermission() {
+  const plat = detectPlatformType();
+  if (plat === 'android' && window.IshitAndroidBridge && typeof window.IshitAndroidBridge.requestNotifyPermission === 'function') {
+    window.IshitAndroidBridge.requestNotifyPermission();
+    showToast('已请求 Android 通知权限');
+    return;
+  }
+  if ('Notification' in window && Notification.permission !== 'granted') {
+    try {
+      const perm = await Notification.requestPermission();
+      updateNotifyPermButtonText();
+      if (perm === 'granted') {
+        showToast('系统级签到通知已开启！');
+        testCrossPlatformNotification();
+      } else {
+        showToast('将使用顶部强提醒横幅与提示音通知您');
+      }
+      return;
+    } catch (_) {}
+  }
+  updateNotifyPermButtonText();
+  testCrossPlatformNotification();
+}
+
+function testCrossPlatformNotification() {
+  const sampleAlert = {
+    id: 'test_' + Date.now(),
+    eventType: 'sign_detected',
+    title: '【ISHIT 实时通知就绪】发现签到 / 签到成功 / 签到失败均会立即提醒',
+    body: '点击通知或顶部横幅即可一键直达该课堂签到或悬赏大厅！',
+    courseName: '测试课程',
+    activeName: '通知通路自检',
+    helperToken: state.status?.bounties?.[0]?.token || '',
+    timeMs: Date.now(),
+  };
+  dispatchCrossPlatformSignAlert(sampleAlert);
+}
+
+function processRealtimeSignAlerts(data) {
+  const alerts = Array.isArray(data.recentAlerts) ? data.recentAlerts : [];
+  const nowMs = Date.now();
+
+  if (!state.initialAlertsSeeded) {
+    state.initialAlertsSeeded = true;
+    let latestUrgent = null;
+    for (const al of alerts) {
+      if (!al || !al.id) continue;
+      state.seenAlertIds.add(String(al.id));
+      if (
+        !latestUrgent &&
+        nowMs - Number(al.timeMs || 0) <= 60 * 1000 &&
+        (al.eventType === 'sign_failed' || al.eventType === 'sign_detected')
+      ) {
+        latestUrgent = al;
+      }
+    }
+    if (latestUrgent) {
+      showLiveSignAlertBanner(latestUrgent);
+    }
+    return;
+  }
+
+  const freshAlerts = alerts
+    .filter((al) => al && al.id && !state.seenAlertIds.has(String(al.id)))
+    .sort((a, b) => Number(a.timeMs || 0) - Number(b.timeMs || 0));
+
+  for (const al of freshAlerts) {
+    state.seenAlertIds.add(String(al.id));
+    dispatchCrossPlatformSignAlert(al);
+  }
+}
+
+function dispatchCrossPlatformSignAlert(alertObj) {
+  if (!alertObj) return;
+  showLiveSignAlertBanner(alertObj);
+  playSignAlertSound(alertObj.eventType);
+
+  const title = alertObj.title || 'ISHIT 签到提醒';
+  const body = alertObj.body || `《${alertObj.courseName || '课程'}》${alertObj.activeName || '签到'}`;
+  const payloadJson = JSON.stringify({
+    eventType: alertObj.eventType || 'sign_detected',
+    helperToken: alertObj.helperToken || '',
+    activeId: alertObj.activeId || '',
+    courseId: alertObj.courseId || '',
+    classId: alertObj.classId || '',
+    courseName: alertObj.courseName || '',
+  });
+
+  if (detectPlatformType() === 'windows') {
+    sendWinHostCmd('win:notify:' + JSON.stringify({ title, body, payload: payloadJson }));
+  }
+
+  if (window.IshitAndroidBridge && typeof window.IshitAndroidBridge.showNotification === 'function') {
+    try {
+      window.IshitAndroidBridge.showNotification(String(title), String(body), payloadJson);
+    } catch (_) {}
+  }
+
+  if (detectPlatformType() === 'web' && 'Notification' in window && Notification.permission === 'granted') {
+    try {
+      const n = new Notification(title, {
+        body,
+        icon: 'favicon.png?v=8',
+        tag: String(alertObj.id || Date.now()),
+      });
+      n.onclick = () => {
+        try { window.focus(); } catch (_) {}
+        n.close();
+        handleAlertDirectJump(alertObj);
+      };
+    } catch (_) {}
+  }
+}
+
+function showLiveSignAlertBanner(alertObj) {
+  state.currentLiveAlert = alertObj;
+  const banner = document.getElementById('liveSignAlertBanner');
+  const badge = document.getElementById('liveSignAlertBadge');
+  const titleEl = document.getElementById('liveSignAlertTitle');
+  const descEl = document.getElementById('liveSignAlertDesc');
+  const btn = document.getElementById('liveSignAlertActionBtn');
+  if (!banner) return;
+
+  banner.classList.remove('alert-failed', 'alert-success', 'alert-detected');
+  if (alertObj.eventType === 'sign_failed') {
+    banner.classList.add('alert-failed');
+    if (badge) badge.textContent = '⚠️ 签到未通过 / 需协助';
+    if (btn) btn.textContent = alertObj.helperToken ? '⚡ 直达帮签' : '查看悬赏榜';
+  } else if (alertObj.eventType === 'sign_success') {
+    banner.classList.add('alert-success');
+    if (badge) badge.textContent = '✅ 签到成功';
+    if (btn) btn.textContent = '查看签到记录';
+  } else {
+    banner.classList.add('alert-detected');
+    if (badge) badge.textContent = '🚨 发现课堂签到';
+    if (btn) btn.textContent = alertObj.helperToken ? '⚡ 直达该签到' : '直达查看';
+  }
+
+  if (titleEl) titleEl.textContent = alertObj.title || `《${alertObj.courseName || '课程'}》${alertObj.activeName || '签到'}`;
+  if (descEl) descEl.textContent = alertObj.body || '';
+  banner.style.display = 'flex';
+
+  clearTimeout(banner._autoHideTimer);
+  const holdMs = alertObj.eventType === 'sign_success' ? 12000 : 28000;
+  banner._autoHideTimer = setTimeout(() => {
+    banner.style.display = 'none';
+  }, holdMs);
+}
+
+function dismissLiveSignAlert() {
+  const banner = document.getElementById('liveSignAlertBanner');
+  if (banner) banner.style.display = 'none';
+}
+
+function onClickLiveSignAlertAction() {
+  const al = state.currentLiveAlert;
+  dismissLiveSignAlert();
+  if (al) handleAlertDirectJump(al);
+}
+
+function handleAlertDirectJump(alertObj) {
+  if (!alertObj) return;
+  if (alertObj.eventType === 'sign_success') {
+    if (document.getElementById('helperApp')?.style.display !== 'none' && state.inAppHelperReturn) {
+      exitInAppHelperMode('global');
+    } else {
+      switchMainModule('global');
+    }
+    const histEl = document.getElementById('historyList');
+    if (histEl) histEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return;
+  }
+
+  if (alertObj.helperToken) {
+    openInAppBountyAssist(alertObj.helperToken, 'bounty');
+    return;
+  }
+
+  const matchBounty = (state.status?.bounties || []).find(
+    (b) => String(b.activeId) === String(alertObj.activeId)
+  );
+  if (matchBounty && matchBounty.token) {
+    openInAppBountyAssist(matchBounty.token, 'bounty');
+    return;
+  }
+
+  switchMainModule('bounty');
+}
+
+window.onNativeNotificationClick = function (rawPayload) {
+  try {
+    const parsed = typeof rawPayload === 'string' ? JSON.parse(rawPayload) : rawPayload;
+    if (parsed) handleAlertDirectJump(parsed);
+  } catch (_) {
+    switchMainModule('bounty');
+  }
+};
+
+function openInAppBountyAssist(token, returnModule = 'bounty') {
+  if (!token) return;
+  state.inAppHelperReturn = true;
+  state.inAppReturnModule = returnModule || 'bounty';
+  state.helperToken = token;
+  initHelperMode(token);
+}
+
+function exitInAppHelperMode(targetMod = null) {
+  stopCameraQrScanner();
+  document.getElementById('helperApp').style.display = 'none';
+  document.getElementById('adminApp').style.display = '';
+  const dest = targetMod || state.inAppReturnModule || 'bounty';
+  state.inAppHelperReturn = false;
+  switchMainModule(dest);
+  refreshStatus(false);
+}
+
+async function initHelperMode(token) {
+  state.helperToken = token;
+  document.getElementById('adminApp').style.display = 'none';
+  document.getElementById('panelLoginApp').style.display = 'none';
+  document.getElementById('helperApp').style.display = 'block';
+
+  const backBtn = document.getElementById('helpBackToAdminBtn');
+  if (backBtn) {
+    backBtn.style.display = state.inAppHelperReturn ? 'inline-flex' : 'none';
+  }
+
+  const resBox = document.getElementById('helpResultBox');
+  if (resBox) resBox.innerHTML = '';
+  const codeEl = document.getElementById('helpSignCode');
+  if (codeEl) codeEl.value = '';
+  const qrEl = document.getElementById('helpQrUrl');
+  if (qrEl) qrEl.value = '';
+
+  const res = await api(`/api/helper/info?token=${encodeURIComponent(token)}`);
+  if (!res.ok) {
+    document.getElementById('helpTitle').textContent = res.msg || '该签到已完成或协助链接已失效';
+    document.getElementById('helpSignBox').style.display = 'none';
+    if (resBox) {
+      resBox.innerHTML = `<div class="empty">${escapeHtml(res.msg || '该签到已全部完成或已截止')}</div>`;
+    }
+    return;
+  }
+
   state.helperSession = res.session;
-  state.status = { locationPresets: res.locationPresets || [] };
-  document.getElementById('helpTitle').textContent = res.session.title || '协助任务';
+  state.helperLoggedIn = Boolean(res.helperLoggedIn);
+  state.helperPrimaryAccount = res.helperPrimaryAccount || null;
+  if (!state.status) state.status = {};
+  state.status.locationPresets = res.locationPresets || [];
+
+  document.getElementById('helpTitle').textContent = res.session.title || '课堂签到互助';
+
+  const idBanner = document.getElementById('helpIdentityBanner');
+  const helperNameInput = document.getElementById('helpHelperName');
+  if (idBanner) {
+    if (res.helperPrimaryAccount) {
+      const p = res.helperPrimaryAccount;
+      idBanner.innerHTML = `🎖️ <strong>已关联 ISHIT 主账号：${escapeHtml(p.name)}</strong>${p.studentId ? `（学号 ${escapeHtml(p.studentId)}）` : ''} · 帮签成功将按成功人数自动加分登上<strong>签到大师排行榜</strong>！`;
+      if (helperNameInput && (!helperNameInput.value || helperNameInput.value === '热心同学' || helperNameInput.value === '同学')) {
+        helperNameInput.value = p.name;
+      }
+    } else {
+      idBanner.innerHTML = `🏆 <strong>签到大师榜规则</strong>：每成功帮签 1 人计 <strong>+1 分</strong>（失败不计分，重试成功即计分）。未登录用户可在提交成功后<strong>事后填写名称与学号</strong>领分上榜！`;
+    }
+  }
 
   if (res.session.mode === 'login') {
     document.getElementById('helpLoginBox').style.display = 'block';
+    document.getElementById('helpCaptchaBox').style.display = 'none';
+    document.getElementById('helpSignBox').style.display = 'none';
     document.getElementById('helpLoginMount').appendChild(document.getElementById('adminLoginPanel'));
   } else if (res.session.mode === 'captcha' && res.pendingCaptcha) {
     document.getElementById('helpCaptchaBox').style.display = 'block';
+    document.getElementById('helpLoginBox').style.display = 'none';
+    document.getElementById('helpSignBox').style.display = 'none';
     state.currentCaptchaKey = res.session.captchaKey;
     document.getElementById('helpCaptchaMount').appendChild(document.getElementById('captchaContainer'));
     await loadCaptchaStage(state.currentCaptchaKey);
   } else {
+    document.getElementById('helpLoginBox').style.display = 'none';
+    document.getElementById('helpCaptchaBox').style.display = 'none';
     document.getElementById('helpSignBox').style.display = 'block';
+
     const sType = res.session.signType || 'normal';
-    const tNames = Array.isArray(res.session.targetNames) && res.session.targetNames.length > 0
-      ? res.session.targetNames.join('/')
-      : '';
     document.getElementById('helpCourseName').textContent = res.session.courseName || '课程签到';
-    document.getElementById('helpActiveName').textContent = tNames
-      ? `${res.session.activeName || '签到活动'} · 帮 ${tNames} 一并完成签到`
-      : (res.session.activeName || '签到活动');
+    document.getElementById('helpActiveName').textContent = res.session.activeName || '签到活动';
     document.getElementById('helpSignType').textContent = SIGN_TYPE_LABELS[sType] || sType;
 
-    // 按协助任务类型仅显示对应操作项
+    renderHelperTargetStatusStrip(res.session);
+
     const applyHelpSections = (type, needLoc, place, range) => {
       const isCode = type === 'code';
       const isPattern = type === 'pattern';
@@ -3070,12 +3616,16 @@ async function initHelperMode(token) {
       const isLoc = type === 'location' || Boolean(needLoc);
       document.getElementById('helpSectionCode').style.display = isCode || isPattern ? 'block' : 'none';
       document.getElementById('helpPatternWrap').style.display = isPattern ? 'block' : 'none';
-      document.getElementById('helpCodeLabel').textContent = isPattern ? '手势序列（点击下方九宫格或直接输入）' : '签到码';
+      document.getElementById('helpCodeLabel').textContent = isPattern
+        ? '👆 手势签到（点击下方九宫格连线或直接输入数字序列）'
+        : '🔢 签到码（输入教师公布的数字/字母签到码）';
       document.getElementById('helpSectionQr').style.display = isQr ? 'block' : 'none';
       document.getElementById('helpSectionLocation').style.display = isLoc ? 'block' : 'none';
       const locLbl = document.getElementById('helpLocationLabel');
-      if (locLbl && place) {
-        locLbl.textContent = `签到位置（要求：${place}${range ? ` · ${range}m内` : ''}）`;
+      if (locLbl) {
+        locLbl.textContent = place
+          ? `📍 签到位置（教师要求：${place}${range ? ` · ${range}m内` : ''}）`
+          : '📍 签到位置';
       }
       const quickBtn = document.getElementById('helpQuickReqLocBtn');
       if (quickBtn) {
@@ -3085,11 +3635,11 @@ async function initHelperMode(token) {
       }
     };
 
-    applyHelpSections(sType, sType === 'location', '', '');
+    applyHelpSections(sType, sType === 'location', res.session.designatedPlace || '', res.session.locationRange || '');
     if (res.session.activeId) {
       try {
         const info = await api(
-          `/api/courses/activeInfo?activeId=${encodeURIComponent(res.session.activeId)}&courseId=${encodeURIComponent(res.session.courseId || '')}&classId=${encodeURIComponent(res.session.classId || '')}`
+          `/api/courses/activeInfo?activeId=${encodeURIComponent(res.session.activeId)}&courseId=${encodeURIComponent(res.session.courseId || '')}&classId=${encodeURIComponent(res.session.classId || '')}&helperToken=${encodeURIComponent(token)}`
         );
         if (info.ok) {
           state.helperRequiredLocation = {
@@ -3103,28 +3653,181 @@ async function initHelperMode(token) {
             statEl.textContent = formatAttendStatsBanner(info.signedCount, info.totalCount);
           }
           applyHelpSections(info.signType || sType, info.needLocation, info.designatedPlace, info.locationRange);
+          if (info.needLocation && (info.requiredLatitude || info.designatedPlace)) {
+            const latEl = document.getElementById('helpLat');
+            const lngEl = document.getElementById('helpLng');
+            const addrEl = document.getElementById('helpAddress');
+            if (latEl && !latEl.value && info.requiredLatitude) latEl.value = info.requiredLatitude;
+            if (lngEl && !lngEl.value && info.requiredLongitude) lngEl.value = info.requiredLongitude;
+            if (addrEl && !addrEl.value && info.designatedPlace) addrEl.value = info.designatedPlace;
+          }
         }
       } catch (_) {}
     }
   }
 }
 
-async function submitHelperSign() {
+function renderHelperTargetStatusStrip(sess) {
+  const strip = document.getElementById('helpTargetStatusStrip');
+  if (!strip || !sess) return;
+  const pendingNames = Array.isArray(sess.pendingNames)
+    ? sess.pendingNames
+    : Array.isArray(sess.targetNames)
+    ? sess.targetNames
+    : [];
+  const succeededNames = Array.isArray(sess.succeededNames) ? sess.succeededNames : [];
+
+  strip.innerHTML = `
+    <div class="bounty-student-pills">
+      ${pendingNames.map((n) => `<span class="student-pill pending">⏳ 待签: ${escapeHtml(n)}</span>`).join('')}
+      ${succeededNames.map((n) => `<span class="student-pill done">✅ 已签: ${escapeHtml(n)}</span>`).join('')}
+    </div>
+  `;
+}
+
+async function submitHelperSign(retryFailedOnly = false) {
   stopCameraQrScanner();
-  const res = await api('/api/helper/submit', 'POST', {
-    token: state.helperToken,
-    helperName: document.getElementById('helpHelperName').value.trim(),
-    signCode: document.getElementById('helpSignCode').value.trim() || null,
-    qrUrl: document.getElementById('helpQrUrl').value.trim() || null,
-    address: document.getElementById('helpAddress').value.trim() || null,
-    latitude: document.getElementById('helpLat').value.trim(),
-    longitude: document.getElementById('helpLng').value.trim(),
-  });
+  const submitBtn = document.getElementById('helpMainSubmitBtn');
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.textContent = '⏳ 正在极速提交签到...';
+  }
   const box = document.getElementById('helpResultBox');
-  if (res.ok && res.record) {
-    box.innerHTML = res.record.results.map((r) => `<div class="list-row"><span>${escapeHtml(r.name)}</span><span class="tag">${escapeHtml(r.msg)}</span></div>`).join('');
+  if (box) {
+    box.innerHTML = `<div class="helper-battle-report">⏳ 正在为待签同学提交签到并校验结果，请稍候...</div>`;
+  }
+
+  try {
+    const res = await api('/api/helper/submit', 'POST', {
+      token: state.helperToken,
+      retryFailedOnly: Boolean(retryFailedOnly),
+      helperName: document.getElementById('helpHelperName')?.value.trim() || '热心同学',
+      signCode: document.getElementById('helpSignCode')?.value.trim() || null,
+      qrUrl: document.getElementById('helpQrUrl')?.value.trim() || null,
+      address: document.getElementById('helpAddress')?.value.trim() || null,
+      latitude: document.getElementById('helpLat')?.value.trim(),
+      longitude: document.getElementById('helpLng')?.value.trim(),
+    });
+
+    if (!res.ok || !res.record) {
+      if (box) {
+        box.innerHTML = `<div class="helper-battle-report report-fail"><strong>❌ 提交失败：</strong>${escapeHtml(res.msg || '请检查签到信息后重试')}</div>`;
+      }
+      showToast(res.msg || '提交失败');
+      return;
+    }
+
+    if (res.session) {
+      state.helperSession = res.session;
+      renderHelperTargetStatusStrip(res.session);
+    }
+
+    const results = res.record.results || [];
+    const okList = results.filter((r) => r.ok);
+    const failList = results.filter((r) => !r.ok);
+    const remainingNames = Array.isArray(res.remainingNames) ? res.remainingNames : failList.map((r) => r.name);
+    const allDone = remainingNames.length === 0 && (okList.length > 0 || (res.allSucceededNames || []).length > 0);
+
+    let reportCls = 'helper-battle-report report-fail';
+    let headline = '❌ 本次暂未签上，请核对位置/二维码/手势后立即重试！';
+    if (allDone) {
+      reportCls = 'helper-battle-report report-all-ok';
+      headline = `🎉 全部签到成功！（共 ${(res.allSucceededNames || okList).length} 人全部搞定）`;
+      playSignAlertSound('sign_success');
+    } else if (okList.length > 0) {
+      reportCls = 'helper-battle-report report-partial';
+      headline = `⚠️ 部分同学已签上（成功 ${okList.length} 人，仍有 ${remainingNames.length} 人未签上，请点击下方一键重试）`;
+      playSignAlertSound('sign_detected');
+    } else {
+      playSignAlertSound('sign_failed');
+    }
+
+    const rowsHtml = results
+      .map((r) => {
+        const icon = r.ok ? '✅' : '❌';
+        const pillCls = r.ok ? 'student-pill done' : 'student-pill pending';
+        return `
+        <div class="list-row" style="padding:7px 0;">
+          <span style="font-weight:700;">${icon} ${escapeHtml(r.name)}</span>
+          <span class="${pillCls}">${escapeHtml(r.msg || (r.ok ? '签到成功' : '未签上，需重试'))}</span>
+        </div>`;
+      })
+      .join('');
+
+    const retryBtnHtml =
+      remainingNames.length > 0
+        ? `<button type="button" class="btn helper-giant-btn" style="width:100%; margin-top:10px; background:#dc2626; border-color:#dc2626;" onclick="submitHelperSign(true)">🔄 一键仅重试未签上的同学（${remainingNames.map((n) => escapeHtml(n)).join(' / ')}）</button>`
+        : '';
+
+    let pointsCardHtml = '';
+    if (Number(res.earnedPoints || 0) > 0) {
+      if (res.autoCredited && res.creditedEntry) {
+        pointsCardHtml = `
+        <div class="helper-claim-card" style="background:#f0fdf4; border-color:#86efac;">
+          <div style="font-weight:700; color:#166534;">🏆 签到大师积分 +${res.earnedPoints} 分已自动入账！</div>
+          <div style="font-size:12px; color:#15803d; margin-top:3px;">
+            已归入 <strong>${escapeHtml(res.creditedEntry.displayName)}</strong>（学号：${escapeHtml(res.creditedEntry.studentId)}） · 当前累计总分：<strong>${res.creditedEntry.score} 分</strong>
+          </div>
+        </div>`;
+      } else if (res.claimToken) {
+        const defaultName = document.getElementById('helpHelperName')?.value.trim() || '';
+        pointsCardHtml = `
+        <div class="helper-claim-card" id="helperClaimCardBox">
+          <div style="font-weight:700; font-size:13px;">🏆 您本次成功帮签了 +${res.earnedPoints} 人！填写名称与学号即可荣登【签到大师排行榜】：</div>
+          <div style="font-size:11px; color:var(--muted); margin-top:2px;">积分将永久归属该学号，同一个学号可以使用多种不同称号展示</div>
+          <div class="row" style="margin-top:8px; gap:6px; flex-wrap:wrap;">
+            <input id="claimHelperNameInput" value="${escapeHtml(defaultName)}" placeholder="你的名称/大侠称号" style="flex:1; min-width:120px;" />
+            <input id="claimStudentIdInput" placeholder="输入你的学号（必填）" style="flex:1; min-width:130px;" />
+            <button type="button" class="btn btn-sm" onclick="submitHelperPointClaim('${escapeHtml(res.claimToken)}')">🏅 领取 +${res.earnedPoints} 分上榜</button>
+          </div>
+        </div>`;
+      }
+    }
+
+    if (box) {
+      box.innerHTML = `
+      <div class="${reportCls}">
+        <div style="font-weight:800; font-size:15px; margin-bottom:8px;">${headline}</div>
+        <div>${rowsHtml}</div>
+        ${retryBtnHtml}
+        ${pointsCardHtml}
+      </div>`;
+    }
+    showToast(allDone ? '🎉 全部签到成功！' : remainingNames.length > 0 ? `部分未签上（剩余 ${remainingNames.length} 人需重试）` : '提交完成');
+  } finally {
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = '🚀 立即提交签到';
+    }
+  }
+}
+
+async function submitHelperPointClaim(claimToken) {
+  const helperName = document.getElementById('claimHelperNameInput')?.value.trim() || '热心同学';
+  const studentId = document.getElementById('claimStudentIdInput')?.value.trim() || '';
+  if (!studentId) {
+    showToast('请输入你的学号以绑定签到大师积分');
+    return;
+  }
+  const res = await api('/api/helper/claim', 'POST', {
+    claimToken,
+    helperName,
+    studentId,
+  });
+  const card = document.getElementById('helperClaimCardBox');
+  if (res.ok && res.entry) {
+    if (card) {
+      card.style.background = '#f0fdf4';
+      card.style.borderColor = '#86efac';
+      card.innerHTML = `
+        <div style="font-weight:700; color:#166534;">🏅 认领成功！积分已归入签到大师榜</div>
+        <div style="font-size:12px; color:#15803d; margin-top:3px;">
+          称号：<strong>${escapeHtml(res.entry.displayName)}</strong> · 学号：<strong>${escapeHtml(res.entry.studentId)}</strong> · 累计总分：<strong>${res.entry.score} 分</strong>
+        </div>`;
+    }
+    showToast(`🏅 认领成功！当前总分 ${res.entry.score} 分`);
   } else {
-    box.innerHTML = `<div class="tag">${escapeHtml(res.msg || '提交失败')}</div>`;
+    showToast(res.msg || '认领失败');
   }
 }
 
@@ -3261,7 +3964,7 @@ async function toggleCameraQrScanner(prefix = "manual") {
           document.getElementById(targetInputId).value = qrText;
           stopCameraQrScanner();
           showToast("扫码成功，正在自动提交签到...");
-          if (prefix === "help") submitHelperSign();
+          if (prefix === "help") submitHelperSign(false);
           else submitManualSign();
           return;
         }

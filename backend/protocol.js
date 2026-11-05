@@ -140,6 +140,7 @@ class CXProtocol {
         avatar: data.pic || `https://photo.chaoxing.com/p/${uid}_80`,
         phone: data.phone || '未知手机号',
         school: data.schoolname || '未知学校',
+        studentId: String(data.uname || data.studentcode || data.xh || '').trim(),
         platform: 'chaoxing',
         deviceInfo: parsedDeviceInfo,
         imAccount,
@@ -253,154 +254,147 @@ class CXProtocol {
   static async getActiveList(courseId, classId, cpi, userId = store.currentUid) {
     if (!userId) return [];
     CXProtocol._activeCooldowns = CXProtocol._activeCooldowns || {};
+    CXProtocol._appActiveCooldowns = CXProtocol._appActiveCooldowns || {};
     CXProtocol._joinTimeCache = CXProtocol._joinTimeCache || {};
     CXProtocol._signTypeCache = CXProtocol._signTypeCache || {};
 
-    const cdKey = userId + '_' + courseId + '_' + classId;
+    const cdKey = userId + "_" + courseId + "_" + classId;
     const nowTop = Date.now();
     const cooldownUntilTop = CXProtocol._activeCooldowns[cdKey] || 0;
     if (cooldownUntilTop > nowTop) {
       const remainSec = Math.ceil((cooldownUntilTop - nowTop) / 1000);
-      const err = new Error('学习通接口频控冷却中(剩余' + remainSec + 's)');
+      const err = new Error("\u5b66\u4e60\u901a\u63a5\u53e3\u9891\u63a7\u51b7\u5374\u4e2d(\u5269\u4f59" + remainSec + "s)");
       err.rateLimited = true;
       err.inCooldown = true;
       throw err;
     }
 
-    const signTypeMap = { 0: 'normal', 2: 'qrCode', 3: 'pattern', 4: 'location', 5: 'code' };
+    const signTypeMap = { 0: "normal", 2: "qrCode", 3: "pattern", 4: "location", 5: "code" };
 
     const inferSignTypeFromName = (nameOne) => {
-      const s = String(nameOne || '');
-      if (s.includes('二维码') || s.includes('扫码')) return 'qrCode';
-      if (s.includes('位置')) return 'location';
-      if (s.includes('手势')) return 'pattern';
-      if (s.includes('签到码')) return 'code';
+      const s = String(nameOne || "");
+      if (s.includes("\u4e8c\u7ef4\u7801") || s.includes("\u626b\u7801")) return "qrCode";
+      if (s.includes("\u4f4d\u7f6e")) return "location";
+      if (s.includes("\u624b\u52bf")) return "pattern";
+      if (s.includes("\u7b7e\u5230\u7801")) return "code";
       return null;
     };
 
-    // 1. 优先走移动端加密接口 ppt/activeAPI/taskactivelist（带 DES 签名 _ext + enc，几乎无频控限制）
-    let cachedJoinTime = CXProtocol._joinTimeCache[cdKey];
-    if (cachedJoinTime === undefined) {
+    // 1. App encrypted endpoint (ppt/activeAPI/taskactivelist)
+    let appRateLimited = false;
+    const appCooldownUntil = CXProtocol._appActiveCooldowns[cdKey] || 0;
+    if (appCooldownUntil <= nowTop) {
+      let cachedJoinTime = CXProtocol._joinTimeCache[cdKey];
+      if (cachedJoinTime === undefined) {
+        try {
+          const joinRes = await cxRequest("https://mooc1-api.chaoxing.com/gas/clazzperson", {
+            params: {
+              courseid: courseId,
+              clazzid: classId,
+              userid: userId,
+              personid: cpi,
+              view: "json",
+              fields: "clazzid,popupagreement,personid,clazzname,createtime",
+            },
+            userId,
+          });
+          cachedJoinTime = joinRes?.data?.[0]?.createtime || "__none__";
+        } catch (_) {
+          cachedJoinTime = "__none__";
+        }
+        CXProtocol._joinTimeCache[cdKey] = cachedJoinTime;
+      }
+      const joinClassTime = cachedJoinTime === "__none__" ? "" : cachedJoinTime;
+
+      const appParams = EncryptionUtil.getEncParams({
+        courseId: String(courseId),
+        classId: String(classId),
+        uid: String(userId),
+        cpi: String(cpi),
+        joinclasstime: String(joinClassTime),
+      });
+
+      let taskData = null;
       try {
-        const joinRes = await cxRequest('https://mooc1-api.chaoxing.com/gas/clazzperson', {
-          params: {
-            courseid: courseId,
-            clazzid: classId,
-            userid: userId,
-            personid: cpi,
-            view: 'json',
-            fields: 'clazzid,popupagreement,personid,clazzname,createtime',
-          },
+        taskData = await cxRequest("https://mobilelearn.chaoxing.com/ppt/activeAPI/taskactivelist", {
+          params: appParams,
           userId,
         });
-        cachedJoinTime = joinRes?.data?.[0]?.createtime || '__none__';
-      } catch (_) {
-        cachedJoinTime = '__none__';
-      }
-      CXProtocol._joinTimeCache[cdKey] = cachedJoinTime;
-    }
-    const joinClassTime = cachedJoinTime === '__none__' ? '' : cachedJoinTime;
+      } catch (_) {}
 
-    const appParams = EncryptionUtil.getEncParams({
-      courseId: String(courseId),
-      classId: String(classId),
-      uid: String(userId),
-      cpi: String(cpi),
-      joinclasstime: String(joinClassTime),
-    });
+      appRateLimited =
+        Boolean(taskData?.errorMsg && String(taskData.errorMsg).includes("\u9891\u7e41")) ||
+        (typeof taskData === "string" && taskData.includes("\u9891\u7e41")) ||
+        (taskData && Number(taskData.result) === 0 && Boolean(taskData.errorMsg));
 
-    let taskData = null;
-    try {
-      taskData = await cxRequest('https://mobilelearn.chaoxing.com/ppt/activeAPI/taskactivelist', {
-        params: appParams,
-        userId,
-      });
-    } catch (_) {}
-
-    const appRateLimited =
-      Boolean(taskData?.errorMsg && String(taskData.errorMsg).includes('频繁')) ||
-      (typeof taskData === 'string' && taskData.includes('频繁')) ||
-      (taskData && Number(taskData.result) === 0 && Boolean(taskData.errorMsg));
-
-    if (
-      taskData &&
-      !appRateLimited &&
-      Number(taskData.result ?? 1) !== 0 &&
-      Array.isArray(taskData.activeList)
-    ) {
-      delete CXProtocol._activeCooldowns[cdKey];
-      const result = [];
-      for (const item of taskData.activeList) {
-        const id = String(item.id);
-        const activeType = Number(item.activeType || 0);
-        const status = Number(item.status) === 1;
-        const isSignActivity = [2, 54, 74].includes(activeType);
-        let signType = null;
-        if (isSignActivity) {
-          if (item.otherId !== undefined && item.otherId !== null) {
-            signType = signTypeMap[Number(item.otherId)] || 'normal';
-            CXProtocol._signTypeCache[id] = signType;
-          } else if (CXProtocol._signTypeCache[id]) {
-            signType = CXProtocol._signTypeCache[id];
-          } else {
-            signType = inferSignTypeFromName(item.nameOne);
-            // 若该活动正在进行中，或历史活动名称为自定义名称无法直接看出类型，调用一次无频控的 getActiveInfoWeb 精确补全并缓存
-            if (!signType && status) {
-              try {
-                const info = await this.getActiveInfoWeb(id, userId);
-                if (info && info.otherId !== undefined && info.otherId !== null) {
-                  signType = signTypeMap[Number(info.otherId)] || 'normal';
-                  CXProtocol._signTypeCache[id] = signType;
-                }
-              } catch (_) {}
+      if (
+        taskData &&
+        !appRateLimited &&
+        Number(taskData.result ?? 1) !== 0 &&
+        Array.isArray(taskData.activeList)
+      ) {
+        delete CXProtocol._activeCooldowns[cdKey];
+        delete CXProtocol._appActiveCooldowns[cdKey];
+        const result = [];
+        for (const item of taskData.activeList) {
+          const id = String(item.id);
+          const activeType = Number(item.activeType || 0);
+          const status = Number(item.status) === 1;
+          const isSignActivity = [2, 54, 74].includes(activeType);
+          let signType = null;
+          if (isSignActivity) {
+            if (item.otherId !== undefined && item.otherId !== null) {
+              signType = signTypeMap[Number(item.otherId)] || "normal";
+              CXProtocol._signTypeCache[id] = signType;
+            } else if (CXProtocol._signTypeCache[id]) {
+              signType = CXProtocol._signTypeCache[id];
+            } else {
+              signType = inferSignTypeFromName(item.nameOne);
+              if (!signType && status) {
+                try {
+                  const info = await this.getActiveInfoWeb(id, userId);
+                  if (info && info.otherId !== undefined && info.otherId !== null) {
+                    signType = signTypeMap[Number(info.otherId)] || "normal";
+                    CXProtocol._signTypeCache[id] = signType;
+                  }
+                } catch (_) {}
+              }
+              if (!signType) signType = "normal";
             }
-            if (!signType) signType = 'normal';
           }
+
+          result.push({
+            id,
+            type: activeType,
+            isSignActivity,
+            name: item.nameOne || "\u8bfe\u5802\u6d3b\u52a8",
+            description: item.nameTwo || item.nameFour || "",
+            url: item.url || "",
+            startTime: item.startTime || 0,
+            attendNum: item.attendNum || 0,
+            status,
+            signType,
+          });
         }
-
-        result.push({
-          id,
-          type: activeType,
-          isSignActivity,
-          name: item.nameOne || '课堂活动',
-          description: item.nameTwo || item.nameFour || '',
-          url: item.url || '',
-          startTime: item.startTime || 0,
-          attendNum: item.attendNum || 0,
-          status,
-          signType,
-        });
+        return result;
       }
-      return result;
+
+      if (appRateLimited) {
+        CXProtocol._appActiveCooldowns[cdKey] = Date.now() + 60 * 1000;
+      }
+    } else {
+      appRateLimited = true;
     }
 
-    if (appRateLimited) {
-      CXProtocol._activeCooldowns[cdKey] = Date.now() + 95 * 1000;
-      const err = new Error('学习通接口触发频控(已进入95s冷却保护)');
-      err.rateLimited = true;
-      err.inCooldown = false;
-      throw err;
-    }
-
-    // 2. 当移动端接口异常时，才回退调用 Web 端 v2/apis/active/student/activelist
-    const now = Date.now();
-    const cooldownUntil = CXProtocol._activeCooldowns[cdKey] || 0;
-    if (cooldownUntil > now) {
-      const remainSec = Math.ceil((cooldownUntil - now) / 1000);
-      const err = new Error('学习通接口频控冷却中(剩余' + remainSec + 's)');
-      err.rateLimited = true;
-      err.inCooldown = true;
-      throw err;
-    }
-
+    // 2. Web hot-standby fallback (v2/apis/active/student/activelist)
     let webTaskData = null;
     try {
-      webTaskData = await cxRequest('https://mobilelearn.chaoxing.com/v2/apis/active/student/activelist', {
+      webTaskData = await cxRequest("https://mobilelearn.chaoxing.com/v2/apis/active/student/activelist", {
         params: {
-          fid: '0',
+          fid: "0",
           courseId: String(courseId),
           classId: String(classId),
-          showNotStartedActive: '0',
+          showNotStartedActive: "0",
           _: String(Date.now()),
         },
         userId,
@@ -408,15 +402,8 @@ class CXProtocol {
     } catch (_) {}
 
     const webRateLimited =
-      Boolean(webTaskData?.errorMsg && String(webTaskData.errorMsg).includes('频繁')) ||
-      (typeof webTaskData === 'string' && webTaskData.includes('频繁'));
-
-    if (webRateLimited) {
-      CXProtocol._activeCooldowns[cdKey] = Date.now() + 95 * 1000;
-      const err = new Error('学习通接口触发频控(请勿频繁操作)，已自动进入 95s 退避冷却');
-      err.rateLimited = true;
-      throw err;
-    }
+      Boolean(webTaskData?.errorMsg && String(webTaskData.errorMsg).includes("\u9891\u7e41")) ||
+      (typeof webTaskData === "string" && webTaskData.includes("\u9891\u7e41"));
 
     if (webTaskData && webTaskData.result === 1 && Array.isArray(webTaskData?.data?.activeList)) {
       delete CXProtocol._activeCooldowns[cdKey];
@@ -430,17 +417,17 @@ class CXProtocol {
         if (isSignActivity) {
           signType =
             w.otherId !== undefined && w.otherId !== null
-              ? signTypeMap[Number(w.otherId)] || 'normal'
-              : 'normal';
+              ? signTypeMap[Number(w.otherId)] || "normal"
+              : "normal";
           CXProtocol._signTypeCache[id] = signType;
         }
         result.push({
           id,
           type: activeType,
           isSignActivity,
-          name: w.nameOne || '课堂活动',
-          description: status ? w.nameFour || w.nameTwo || '' : w.nameTwo || w.nameFour || '',
-          url: w.url || '',
+          name: w.nameOne || "\u8bfe\u5802\u6d3b\u52a8",
+          description: status ? w.nameFour || w.nameTwo || "" : w.nameTwo || w.nameFour || "",
+          url: w.url || "",
           startTime: w.startTime || 0,
           attendNum: w.attendNum || 0,
           status,
@@ -450,9 +437,9 @@ class CXProtocol {
       return result;
     }
 
-    if (appRateLimited) {
+    if (webRateLimited || appRateLimited) {
       CXProtocol._activeCooldowns[cdKey] = Date.now() + 60 * 1000;
-      const err = new Error('学习通接口触发频控(请勿频繁操作)，已切换账号或进入退避冷却');
+      const err = new Error("\u5b66\u4e60\u901a\u63a5\u53e3\u89e6\u53d1\u9891\u63a7(\u5df2\u8fdb\u516560s\u51b7\u5374\u4fdd\u62a4)");
       err.rateLimited = true;
       throw err;
     }

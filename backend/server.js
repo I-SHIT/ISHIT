@@ -18,8 +18,14 @@ const { CXProtocol } = require('./protocol.js');
 const {
   decodeQrFromImageBuffer,
   broadcastNapCat,
+  getPublicBaseUrlClean,
   createHelperSession,
   getHelperSession,
+  creditHelperPointsToStudent,
+  claimHelperPointsByToken,
+  getFormattedLeaderboard,
+  syncActiveBountiesNow,
+  getActiveBountiesForUser,
   executeSignForActive,
   findMatchingAccountsForClass,
   processIncomingChatImageItem,
@@ -206,6 +212,7 @@ function sanitizeAccountForClient(acc, isAdmin = false, currentUsername = '') {
     avatar: acc.avatar,
     phone: canSeeFullPhone ? acc.phone : maskPhone(acc.phone),
     school: acc.school,
+    studentId: acc.studentId || '',
     platform: acc.platform,
     status: acc.status,
     ownerUsername: acc.ownerUsername,
@@ -222,7 +229,7 @@ function sanitizeAccountsListForClient(accounts, currentSess) {
 
 function isHelperAuthorizedRoute(req, pathname, parsedUrl) {
   if (pathname === '/api/napcat/webhook_image') return isAuthorizedNapcatWebhook(req);
-  if (pathname === '/api/helper/info' || pathname === '/api/helper/submit') return true;
+  if (pathname === '/api/helper/info' || pathname === '/api/helper/submit' || pathname === '/api/helper/claim' || pathname === '/api/helper/leaderboard') return true;
   const hToken = req.headers['x-helper-token'] || parsedUrl.searchParams.get('helperToken') || '';
   if (!hToken) return false;
   const hs = getHelperSession(hToken);
@@ -397,7 +404,7 @@ const server = http.createServer(async (req, res) => {
         return res.end(fs.readFileSync(path.join(webRoot, 'index.html'), 'utf8'));
       }
     } else if (pathname === '/' || pathname === '/index.html') {
-      return sendJson(res, { ok: true, service: 'ISHIT Backend API', version: 'beta', webUrl: 'http://ishit.pw' });
+      return sendJson(res, { ok: true, service: 'ISHIT Backend API', version: '0.1', webUrl: 'http://ishit.pw' });
     }
 
     // 0. 面板访问登录鉴权 (支持 Admin / User 权限分级)
@@ -653,13 +660,19 @@ const server = http.createServer(async (req, res) => {
       const myOwnedNames = myOwnedAccounts.map((a) => String(a.name || '')).filter(Boolean);
       const myOwnedAcc = myOwnedAccounts[0] || null;
       const myCourseNames = new Set();
+      const myCourseIds = new Set();
+      const myClassIds = new Set();
       for (const acc of myOwnedAccounts) {
         const eff = getEffectiveUserProfile(acc.uid);
         for (const c of eff?.coursesCache || []) {
           const cn = c.name || c.courseName;
           if (cn) myCourseNames.add(String(cn));
+          if (c.courseId) myCourseIds.add(String(c.courseId));
+          if (c.classId) myClassIds.add(String(c.classId));
         }
       }
+      // 触发非阻塞高频状态巡检，确保悬赏榜与活动监测毫秒级剔除已截止/已签完活动
+      syncActiveBountiesNow({ force: false }).catch(() => {});
 
       const defaultSelectedUid = isAdmin
         ? (store.currentUid || store.accounts?.[0]?.uid || null)
@@ -723,11 +736,104 @@ const server = http.createServer(async (req, res) => {
             })
             .slice(0, 100);
 
-      const visibleActives = isAdmin
-        ? (engine.lastDetectedActives || [])
-        : (engine.lastDetectedActives || []).filter((item) =>
-            (item.memberUids || []).some((u) => myOwnedUids.includes(String(u)))
-          );
+      const activeBounties = getActiveBountiesForUser({
+        myCourseIds,
+        myClassIds,
+        myCourseNames,
+        myOwnedUids,
+      });
+
+      // 活动监测与签到悬赏共享同一实时真理源 (SSOT)：合并未签完悬赏与实时监测活动，自动过滤本人已签完的活动防止重签
+      const unifiedActivesMap = new Map();
+      for (const item of engine.lastDetectedActives || []) {
+        const act = item.active || item;
+        const aid = String(act?.id || '');
+        if (!aid) continue;
+        if (!isAdmin) {
+          const relatedToMe =
+            (item.memberUids || []).some((u) => myOwnedUids.includes(String(u))) ||
+            (item.classId && myClassIds.has(String(item.classId))) ||
+            (item.courseId && myCourseIds.has(String(item.courseId)));
+          if (!relatedToMe) continue;
+          // 若我绑定的账号已经签成功，则不再在我的“活动监测”里展示为待签（防误触重签）
+          if (
+            myOwnedUids.length > 0 &&
+            Array.isArray(item.succeededUids) &&
+            myOwnedUids.every((u) => item.succeededUids.includes(String(u)))
+          ) {
+            continue;
+          }
+        }
+        unifiedActivesMap.set(aid, item);
+      }
+      // 反哺：若签到悬赏里有本人或同课待签活动，但轮询间隙尚未塞入监测卡片，同步补齐到活动监测
+      for (const b of activeBounties) {
+        const aid = String(b.activeId || '');
+        if (!aid) continue;
+        if (!isAdmin && !b.includesMe && !b.isMyCourse) continue;
+        if (!isAdmin && myOwnedUids.length > 0 && !b.includesMe && Array.isArray(b.succeededUids) && myOwnedUids.some((u) => b.succeededUids.includes(String(u)))) {
+          continue;
+        }
+        if (!unifiedActivesMap.has(aid)) {
+          unifiedActivesMap.set(aid, {
+            courseId: b.courseId,
+            classId: b.classId,
+            courseName: b.courseName,
+            memberUids: b.targetUids,
+            memberNames: b.targetNames,
+            pendingUids: b.pendingUids,
+            pendingNames: b.pendingNames,
+            succeededUids: b.succeededUids,
+            succeededNames: b.succeededNames,
+            helperToken: b.token,
+            designatedPlace: b.designatedPlace,
+            locationRange: b.locationRange,
+            active: {
+              id: b.activeId,
+              name: b.activeName,
+              signType: b.signType,
+              status: true,
+              signedCount: b.signedCount,
+              totalCount: b.totalCount,
+              endTimeMs: b.endTimeMs,
+              waitingThreshold: b.waitingThreshold,
+            },
+          });
+        } else {
+          const ex = unifiedActivesMap.get(aid);
+          ex.pendingUids = b.pendingUids;
+          ex.pendingNames = b.pendingNames;
+          ex.succeededUids = b.succeededUids;
+          ex.succeededNames = b.succeededNames;
+          ex.helperToken = b.token;
+          if (ex.active) {
+            ex.active.signedCount = b.signedCount || ex.active.signedCount || 0;
+            ex.active.totalCount = b.totalCount || ex.active.totalCount || 0;
+            ex.active.endTimeMs = b.endTimeMs || ex.active.endTimeMs || 0;
+          }
+        }
+      }
+      const visibleActives = Array.from(unifiedActivesMap.values());
+
+      // 为当前登录用户筛选与其学习通账号相关的实时通知（签到检测、签到成功、签到失败）
+      const nowMs = Date.now();
+      const visibleAlerts = (store.recentAlerts || [])
+        .filter((al) => {
+          if (!al || nowMs - Number(al.timeMs || 0) > 25 * 60 * 1000) return false;
+          if (isAdmin) return true;
+          const hitUid = (al.targetUids || []).some((u) => myOwnedUids.includes(String(u)));
+          const hitName = (al.targetNames || []).some((n) => myOwnedNames.includes(String(n)));
+          // 签到成功/失败仅通知当事人；发现新签到通知当事人或同班同学
+          if (al.eventType === 'sign_success' || al.eventType === 'sign_failed') {
+            return hitUid || hitName;
+          }
+          const hitCourse =
+            (al.classId && myClassIds.has(String(al.classId))) ||
+            (al.courseId && myCourseIds.has(String(al.courseId))) ||
+            (al.courseName && myCourseNames.has(String(al.courseName)));
+          return hitUid || hitName || hitCourse;
+        })
+        .slice(0, 20);
 
       const visibleCaptchas = isAdmin
         ? Object.values(store.pendingCaptchas || {})
@@ -762,6 +868,9 @@ const server = http.createServer(async (req, res) => {
           users: sanitizedUsers,
         },
         napcat: isAdmin ? store.napcat : null,
+        bounties: activeBounties,
+        leaderboard: getFormattedLeaderboard(),
+        recentAlerts: visibleAlerts,
         pendingCaptchas: visibleCaptchas,
         history: visibleHistory,
         logs: visibleLogs,
@@ -1426,6 +1535,10 @@ const server = http.createServer(async (req, res) => {
       delete store.pendingCaptchas[key];
       saveStore();
 
+      const relatedHs = (store.helperSessions || []).find(
+        (s) => !s.completed && String(s.activeId) === String(item.activeId) && Array.isArray(s.targetUids) && s.targetUids.length > 0
+      );
+      const captchaTargetUids = relatedHs ? relatedHs.targetUids : [item.uid];
       const record = await executeSignForActive({
         courseId: item.courseId,
         classId: item.classId,
@@ -1433,7 +1546,7 @@ const server = http.createServer(async (req, res) => {
         courseName: item.courseName,
         activeId: item.activeId,
         activeName: item.activeName,
-        targetUids: null, // 同班级已签账号自动合并展示，当前账号使用 validate 完成重签
+        targetUids: captchaTargetUids,
         signCode: item.signCode,
         enc: item.enc,
         enc2: item.enc2,
@@ -1573,25 +1686,117 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, { ok: true, session: hs, shareUrl, napcatResult });
     }
 
+    if (pathname === '/api/bounties/sync' && req.method === 'POST') {
+      await syncActiveBountiesNow({ force: true });
+      const pa = ensurePanelAuthStore();
+      const isAdmin = !currentSess || currentSess.role === 'admin';
+      const currentUsername = currentSess ? currentSess.username : (pa.username || 'ishit');
+      const myOwnedAccounts = (store.accounts || []).filter((a) => a && a.ownerUsername === currentUsername);
+      const myOwnedUids = myOwnedAccounts.map((a) => String(a.uid));
+      const myCourseNames = new Set();
+      const myCourseIds = new Set();
+      const myClassIds = new Set();
+      for (const acc of myOwnedAccounts) {
+        const eff = getEffectiveUserProfile(acc.uid);
+        for (const c of eff?.coursesCache || []) {
+          const cn = c.name || c.courseName;
+          if (cn) myCourseNames.add(String(cn));
+          if (c.courseId) myCourseIds.add(String(c.courseId));
+          if (c.classId) myClassIds.add(String(c.classId));
+        }
+      }
+      return sendJson(res, {
+        ok: true,
+        bounties: getActiveBountiesForUser({ myCourseIds, myClassIds, myCourseNames, myOwnedUids }),
+        leaderboard: getFormattedLeaderboard(),
+        isAdmin,
+      });
+    }
+
+    if (pathname === '/api/helper/leaderboard' && req.method === 'GET') {
+      return sendJson(res, { ok: true, leaderboard: getFormattedLeaderboard() });
+    }
+
+    if (pathname === '/api/helper/claim' && req.method === 'POST') {
+      const body = await readBodyJson(req);
+      const resClaim = claimHelperPointsByToken({
+        claimToken: body.claimToken || '',
+        helperName: body.helperName || '',
+        studentId: body.studentId || '',
+      });
+      if (!resClaim.ok) return sendJson(res, resClaim, 400);
+      return sendJson(res, {
+        ...resClaim,
+        leaderboard: getFormattedLeaderboard(),
+      });
+    }
+
     if (pathname === '/api/helper/info' && req.method === 'GET') {
       const token = parsedUrl.searchParams.get('token') || '';
       const hs = getHelperSession(token);
-      if (!hs) return sendJson(res, { ok: false, msg: '协助链接已过期' }, 404);
+      if (!hs) return sendJson(res, { ok: false, msg: '协助链接已过期或签到已结束' }, 404);
+      // 打开协助页时顺带刷新一次该活动的最新状态
+      await syncActiveBountiesNow({ force: false }).catch(() => {});
       const pendingCaptcha = hs.captchaKey ? store.pendingCaptchas?.[hs.captchaKey] : null;
+      let loggedInHelperAccount = null;
+      if (currentSess) {
+        if (currentSess.role === 'admin') {
+          loggedInHelperAccount =
+            (store.accounts || []).find((a) => a.ownerUsername === currentSess.username) ||
+            (store.accounts || []).find((a) => String(a.uid) === String(store.currentUid)) ||
+            store.accounts?.[0] ||
+            null;
+        } else {
+          loggedInHelperAccount = (store.accounts || []).find((a) => a.ownerUsername === currentSess.username) || null;
+        }
+      }
       return sendJson(res, {
         ok: true,
         session: hs,
         pendingCaptcha,
         locationPresets: store.locationPresets || [],
+        helperLoggedIn: Boolean(currentSess),
+        helperPrimaryAccount: loggedInHelperAccount
+          ? {
+              uid: loggedInHelperAccount.uid,
+              name: loggedInHelperAccount.name,
+              studentId: loggedInHelperAccount.studentId || '',
+              school: loggedInHelperAccount.school || '',
+              avatar: loggedInHelperAccount.avatar || '',
+            }
+          : null,
       });
     }
 
     if (pathname === '/api/helper/submit' && req.method === 'POST') {
       const body = await readBodyJson(req);
       const hs = getHelperSession(body.token);
-      if (!hs) return sendJson(res, { ok: false, msg: '协助链接已过期' }, 404);
+      if (!hs) return sendJson(res, { ok: false, msg: '协助链接已过期或该签到已截止' }, 404);
 
-      if (hs.mode === 'sign') {
+      if (hs.mode === 'sign' || hs.mode === 'captcha') {
+        // 仅针对当前仍未签上的同学发起签到（或全量兜底校验），绝不漏掉失败重试者
+        const retryOnly = Boolean(body.retryFailedOnly);
+        const submitTargets =
+          retryOnly && Array.isArray(hs.pendingUids) && hs.pendingUids.length > 0
+            ? hs.pendingUids
+            : hs.targetUids;
+
+        // 识别登录态辅助主账号
+        let helperAcc = null;
+        if (currentSess) {
+          if (currentSess.role === 'admin') {
+            helperAcc =
+              (body.helperUid && (store.accounts || []).find((a) => String(a.uid) === String(body.helperUid))) ||
+              (store.accounts || []).find((a) => a.ownerUsername === currentSess.username) ||
+              (store.accounts || []).find((a) => String(a.uid) === String(store.currentUid)) ||
+              store.accounts?.[0] ||
+              null;
+          } else {
+            helperAcc = (store.accounts || []).find((a) => a.ownerUsername === currentSess.username) || null;
+          }
+        }
+
+        const displayHelper = String(body.helperName || helperAcc?.name || currentSess?.username || '热心同学').trim();
         const record = await executeSignForActive({
           courseId: hs.courseId,
           classId: hs.classId,
@@ -1599,19 +1804,98 @@ const server = http.createServer(async (req, res) => {
           courseName: hs.courseName || '协助课程',
           activeId: hs.activeId,
           activeName: hs.activeName || '协助签到',
-          targetUids: hs.targetUids,
+          targetUids: submitTargets,
           signCode: body.signCode || null,
           enc: body.enc || null,
           qrUrl: body.qrUrl || null,
           address: body.address || null,
-          latitude: body.latitude !== undefined && body.latitude !== '' ? Number(body.latitude) : null,
-          longitude: body.longitude !== undefined && body.longitude !== '' ? Number(body.longitude) : null,
-          triggerSource: `协助(${body.helperName || '同学'})`,
+          latitude: body.latitude !== undefined && body.latitude !== '' && body.latitude !== null ? Number(body.latitude) : null,
+          longitude: body.longitude !== undefined && body.longitude !== '' && body.longitude !== null ? Number(body.longitude) : null,
+          triggerSource: `悬赏互助(${displayHelper})`,
         });
-        hs.completed = record.results.some((r) => r.ok);
+
+        // 合并更新本悬赏会话的成功/未成功名单（只有全部签上才关闭悬赏，部分失败允许继续一键重试！）
+        const prevSucceededSet = new Set((hs.succeededUids || []).map(String));
+        const prevCreditedSet = new Set((hs.creditedUids || []).map(String));
+        const newlyCreditedUsers = [];
+
+        for (const r of record.results || []) {
+          const rUid = String(r.uid);
+          if (r.ok) {
+            prevSucceededSet.add(rUid);
+            // 只有真正因本次互助签成功（或首次确认成功且未计过分、排除本人自签可选但题目规定根据签到成功人数加分，签失败不算，重试成功才算）
+            if (!r.already && !prevCreditedSet.has(rUid)) {
+              prevCreditedSet.add(rUid);
+              newlyCreditedUsers.push(r);
+            }
+          }
+        }
+
+        const allTargetUids = (hs.targetUids || []).map(String);
+        const remainingUids = allTargetUids.filter((u) => !prevSucceededSet.has(u));
+        const remainingNames = remainingUids.map(
+          (u) => (store.accounts || []).find((a) => String(a.uid) === u)?.name || u
+        );
+        const allSucceededNames = Array.from(prevSucceededSet).map(
+          (u) => (store.accounts || []).find((a) => String(a.uid) === u)?.name || u
+        );
+
+        hs.creditedUids = Array.from(prevCreditedSet);
+        hs.succeededUids = Array.from(prevSucceededSet);
+        hs.succeededNames = allSucceededNames;
+        hs.pendingUids = remainingUids;
+        hs.pendingNames = remainingNames;
+        hs.completed = remainingUids.length === 0 && prevSucceededSet.size > 0;
+        hs.updatedAt = Date.now();
         hs.lastResult = record;
+
+        const earnedPoints = newlyCreditedUsers.length;
+        let autoCredited = false;
+        let creditedEntry = null;
+        let claimToken = '';
+
+        if (earnedPoints > 0) {
+          const explicitSid = String(body.studentId || '').trim();
+          if (helperAcc || explicitSid) {
+            // 已登录 ISHIT 主账号或已直接提供学号 -> 自动归入该主账号/学号名下
+            creditedEntry = creditHelperPointsToStudent({
+              studentId: explicitSid || helperAcc?.studentId || helperAcc?.uid || '',
+              helperName: body.helperName || helperAcc?.name || currentSess?.username || '',
+              cxAccount: helperAcc,
+              points: earnedPoints,
+              activeId: hs.activeId,
+              courseName: hs.courseName,
+            });
+            autoCredited = Boolean(creditedEntry);
+          } else {
+            // 未登录 ISHIT -> 生成事后认领凭证，允许在结果页填写名称+学号入榜
+            claimToken = EncryptionUtil.getUniqueId();
+            store.helperClaims = store.helperClaims || {};
+            store.helperClaims[claimToken] = {
+              claimToken,
+              points: earnedPoints,
+              activeId: hs.activeId,
+              courseName: hs.courseName,
+              helpedNames: newlyCreditedUsers.map((u) => u.name || u.uid),
+              createdAt: Date.now(),
+              claimed: false,
+            };
+          }
+        }
+
         saveStore();
-        return sendJson(res, { ok: true, record });
+        return sendJson(res, {
+          ok: true,
+          record,
+          session: hs,
+          earnedPoints,
+          autoCredited,
+          creditedEntry,
+          claimToken,
+          remainingCount: remainingUids.length,
+          remainingNames,
+          allSucceededNames,
+        });
       }
       return sendJson(res, { ok: false, msg: '不支持的协助模式' });
     }
@@ -1678,6 +1962,13 @@ const server = http.createServer(async (req, res) => {
         pb = pb.replace(/^http:\/\/ishit\.pw\b/i, 'https://ishit.pw');
         body.publicBaseUrl = pb.replace(/\/+$/, '');
       }
+      if (Array.isArray(body.groups)) {
+        body.groups = body.groups.map((g) => (String(g).trim() === '1178498159' ? '1134393264' : String(g).trim())).filter(Boolean);
+      }
+      if (body.groupBindings && body.groupBindings['1178498159'] && !body.groupBindings['1134393264']) {
+        body.groupBindings['1134393264'] = body.groupBindings['1178498159'];
+        delete body.groupBindings['1178498159'];
+      }
       store.napcat = { ...store.napcat, ...body };
       saveStore();
       return sendJson(res, { ok: true, napcat: store.napcat });
@@ -1735,6 +2026,15 @@ server.listen(PORT, '0.0.0.0', async () => {
   sysLog('BOOT', `服务已启动 http://127.0.0.1:${PORT}`);
   // 启动时若已有登录账号，但未缓存课表，自动拉取一次学习通课表
   for (const acc of store.accounts || []) {
+    if (!acc.studentId) {
+      try {
+        const uInfo = await CXProtocol.fetchUserInfo({ userId: acc.uid });
+        if (uInfo?.studentId) {
+          acc.studentId = uInfo.studentId;
+          saveStore();
+        }
+      } catch (_) {}
+    }
     const prof = ensureUserProfile(acc.uid);
     if (!prof.coursesCache || prof.coursesCache.length === 0) {
       await CXProtocol.getCoursesList(acc.uid);

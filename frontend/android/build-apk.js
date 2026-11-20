@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 const andRoot = __dirname;
+execFileSync(process.execPath, [path.join(andRoot, '../local/build.js')], { stdio: 'inherit' });
 const buildDir = path.join(andRoot, 'build');
 const genJavaDir = path.join(buildDir, 'gen');
 const classesDir = path.join(buildDir, 'classes');

@@ -20,6 +20,7 @@ const {
   decodeQrFromImageBuffer,
   broadcastNapCat,
   getPublicBaseUrlClean,
+  getHelperShareUrl,
   createHelperSession,
   getHelperSession,
   creditHelperPointsToStudent,
@@ -406,7 +407,7 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(200, { 'Content-Type': 'text/css; charset=utf-8', 'Cache-Control': 'no-store' });
         return res.end(fs.readFileSync(path.join(webRoot, 'style.css'), 'utf8'));
       }
-      if (pathname === '/app.js' || pathname === '/offline.js') {
+      if (['/app.js', '/offline.js', '/local-engine.js'].includes(pathname)) {
         res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-store' });
         return res.end(fs.readFileSync(path.join(webRoot, pathname.slice(1)), 'utf8'));
       }
@@ -1756,15 +1757,7 @@ const server = http.createServer(async (req, res) => {
         creatorUsername: currentSess?.username || ensurePanelAuthStore().username || 'ishit',
         creatorRole: currentSess?.role || 'admin',
       });
-      let rawPublicBase = String(store.napcat?.publicBaseUrl || 'https://ishit.pw').trim();
-      if (!rawPublicBase || /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/.*)?$/i.test(rawPublicBase)) {
-        rawPublicBase = 'https://ishit.pw';
-      } else if (!/^https?:\/\//i.test(rawPublicBase)) {
-        rawPublicBase = `https://${rawPublicBase}`;
-      }
-      rawPublicBase = rawPublicBase.replace(/^http:\/\/ishit\.pw\b/i, 'https://ishit.pw');
-      const base = rawPublicBase.replace(/\/+$/, '');
-      const shareUrl = `${base}/?help=${hs.token}`;
+      const shareUrl = getHelperShareUrl(hs);
 
       let napcatResult = null;
       if (body.broadcastToNapCat) {
@@ -2524,7 +2517,7 @@ process.on('unhandledRejection', (reason) => {
   });
 });
 
-server.listen(PORT, '0.0.0.0', async () => {
+if (!globalThis.ISHIT_LOCAL_CLIENT) server.listen(PORT, '0.0.0.0', async () => {
   sysLog('BOOT', `服务已启动 http://127.0.0.1:${PORT}`);
   // 启动时若已有登录账号，但未缓存课表，自动拉取一次学习通课表
   for (const acc of store.accounts || []) {

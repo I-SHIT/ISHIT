@@ -228,6 +228,7 @@ async function loadExternalConfigJson() {
 }
 
 function getApiBaseUrl() {
+  if (isOfflineMode()) return '';
   const syncEp = readBridgeConfigSync();
   if (syncEp) return syncEp;
   if (_loadedConfigEndpoint) {
@@ -241,6 +242,7 @@ function getApiBaseUrl() {
 function resolveAssetUrl(rawUrl) {
   const s = String(rawUrl || '').trim();
   if (!s) return '';
+  if (isOfflineMode() && (s.startsWith('/uploads/comments/') || s.startsWith('/api/comment_images/'))) return localAssetUrl(s);
   if (/^(https?:|data:|blob:)/i.test(s)) return s;
   const base = getApiBaseUrl();
   if (s.startsWith('/')) return base ? base + s : s;
@@ -258,7 +260,7 @@ function openImagePreviewModal(src) {
 function syncApiEndpointUi() {}
 
 async function api(url, method = 'GET', body = null) {
-  if (localStorage.getItem(MODE_KEY) === 'offline') return { ok: false, msg: '当前处于离线模式' };
+  if (isOfflineMode()) return localApi(url, method, body);
   const base = getApiBaseUrl();
   const fullUrl = /^https?:\/\//i.test(url) ? url : (base ? base + url : url);
   const isCrossOrigin = Boolean(base && (!location.origin || base !== location.origin));
@@ -396,6 +398,7 @@ function canEditSelectedAccount() {
 }
 
 function applyPanelRolePermissionsUi(panelAuth) {
+  applyOfflineUi();
   const role = panelAuth?.role || state.panelRole || 'admin';
   const username = panelAuth?.username || state.panelUsername || '';
   state.panelRole = role;
@@ -604,6 +607,7 @@ function showPanelLoginScreen() {
 }
 
 function syncAndroidNativeDaemonState(usernameOverride = '') {
+  if (isOfflineMode()) return;
   if (window.IshitAndroidBridge && typeof window.IshitAndroidBridge.syncAuthState === 'function') {
     try {
       const tk = localStorage.getItem('ishit_panel_token') || '';
@@ -659,6 +663,7 @@ async function submitPanelLogin() {
 }
 
 async function doPanelLogout() {
+  if (isOfflineMode()) return leaveOfflineMode();
   await api('/api/auth/logout', 'POST', {});
   localStorage.removeItem('ishit_panel_token');
   syncAndroidNativeDaemonState('');
@@ -813,8 +818,22 @@ async function savePanelAuthCredentials() {
 
 window.addEventListener('DOMContentLoaded', async () => {
   applyPlatformLayoutClass();
-  if (localStorage.getItem('ishit_mode') === 'offline') {
-    openOfflineWorkspace();
+  applyOfflineUi();
+  if (isOfflineMode()) {
+    initPatternGrid('manualPatternGrid', 'manualSignCode');
+    initPatternGrid('helpPatternGrid', 'helpSignCode');
+    try {
+      await startLocalEngine();
+      enterAdminPanel();
+      const params = new URLSearchParams(location.search);
+      if (params.has('localShare')) {
+        document.getElementById('localShareInput').value = location.href;
+        switchMainModule('bounty');
+      } else if (params.get('help')) openInAppBountyAssist(params.get('help'));
+    } catch (err) {
+      showPanelLoginScreen();
+      showToast(err.message);
+    }
     return;
   }
   if (!new URLSearchParams(location.search).has('help')) showPanelLoginScreen();
@@ -3925,7 +3944,6 @@ function handleAlertDirectJump(alertObj) {
 }
 
 window.onNativeNotificationClick = function (rawPayload) {
-  if (localStorage.getItem(MODE_KEY) === 'offline') return;
   refreshStatus(false);
   try {
     const parsed = typeof rawPayload === 'string' ? JSON.parse(rawPayload) : rawPayload;

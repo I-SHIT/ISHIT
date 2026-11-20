@@ -1991,17 +1991,6 @@ html.platform-windows .win-resize-bottomright {
   font-size: 12px;
 }
 
-html.offline-mode body { display: block; height: 100dvh; overflow-y: auto; }
-#offline-workspace { max-width: 1000px; margin: auto; padding: 28px 20px 64px; }
-#offline-workspace[hidden], #offline-file[hidden] { display: none; }
-#offline-workspace h2 { font-size: 17px; }
-#offline-workspace h3 { margin-top: 12px; font-size: 15px; }
-#offline-workspace p { margin: 8px 0 16px; }
-#offline-workspace form { display: grid; gap: 8px; margin: 14px 0 24px; }
-#offline-workspace label { display: block; }
-#offline-workspace input[type=checkbox] { width: auto; }
-#offline-workspace .btn { margin-right: 4px; }
-#offline-workspace .list-row { flex-wrap: wrap; gap: 4px; }
-#offline-workspace .list-row span { flex: 1; }
-html.platform-windows #offline-workspace { padding-top: 52px; }
-@media (max-width: 680px) { #offline-workspace .grid-2 { grid-template-columns: 1fr; } }
+.offline-only { display: none; }
+html.offline-mode .offline-only { display: block; }
+html.offline-mode .online-only { display: none; }

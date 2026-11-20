@@ -1,217 +1,311 @@
-const OFFLINE_KEY = 'ishit_offline_workspace_v1';
 const MODE_KEY = 'ishit_mode';
-let offlineData;
-let offlineTick;
-const localEl = id => document.getElementById('offline-' + id);
-const weekdays = ['一', '二', '三', '四', '五', '六', '日'];
+const LOCAL_DB = 'ishit-local-engine';
+const LOCAL_FORMAT = 'ishit-local';
+let localWorker = null;
+let localReady = null;
+let localSequence = 0;
+let localNetworkSequence = 0;
+const localNetworkPrefix = Array.from(crypto.getRandomValues(new Uint32Array(2)), n => n.toString(16)).join('-');
+let localWrite = Promise.resolve();
+let localDb = null;
+let localActive = !document.hidden;
+let localPersistenceError = null;
+const localCalls = new Map();
+const localNetwork = new Map();
+const localFiles = {};
+const localAssetUrls = new Map();
 
-function semesterStart(week) {
-  const date = new Date();
-  date.setDate(date.getDate() - (date.getDay() + 6) % 7 - 7 * (week - 1));
-  return [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-');
+function isOfflineMode() { return localStorage.getItem(MODE_KEY) === 'offline'; }
+function decodeLocalText(base64) {
+  return new TextDecoder().decode(Uint8Array.from(atob(base64), c => c.charCodeAt(0)));
 }
-
-function createLocalProfile(status) {
-  const profile = status?.effectiveProfile || {};
-  const curriculum = profile.effectiveCurriculum;
-  const courses = (status?.courses || []).map(c => ({
-    id: JSON.stringify([String(c.courseId), String(c.classId || '')]),
-    name: String(c.name || c.courseName || c.courseId),
-    classroom: String(c.note || ''), enabled: c.settings?.pollingEnabled !== false
-  }));
-  const lessons = [];
-  const imported = profile.useCurriculumSchedule === false ? [] : curriculum?.lessons || [];
-  for (const l of [...imported, ...(profile.diyLessons || [])]) {
-    if (!validTime(l.startTime) || !validTime(l.endTime) || l.endTime <= l.startTime || !(l.dayOfWeek >= 1 && l.dayOfWeek <= 7)) continue;
-    const source = (status?.courses || []).find(c =>
-      (!l.classId || String(l.classId) === String(c.classId)) &&
-      (l.courseId ? String(l.courseId) === String(c.courseId) : (c.name || c.courseName) === l.name));
-    const id = source ? JSON.stringify([String(source.courseId), String(source.classId || '')]) :
-      JSON.stringify([String(l.courseId || l.name || '课程'), String(l.classId || '')]);
-    if (!courses.some(c => c.id === id)) courses.push({ id, name: String(l.name || '课程'), classroom: String(l.location || ''), enabled: true });
-    lessons.push({ course: id, day: Number(l.dayOfWeek), start: l.startTime, end: l.endTime,
-      weeks: Array.isArray(l.weeks) ? [...new Set(l.weeks.map(Number).filter(w => Number.isInteger(w) && w > 0))] : [],
-      enabled: l.enabled !== false && l.pollingEnabled !== false });
+function encodeLocalText(text) {
+  const bytes = new TextEncoder().encode(text);
+  let raw = '';
+  for (const byte of bytes) raw += String.fromCharCode(byte);
+  return btoa(raw);
+}
+function openLocalDatabase() {
+  if (localDb) return Promise.resolve(localDb);
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(LOCAL_DB, 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('files');
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => { localDb = request.result; resolve(localDb); };
+  });
+}
+async function readLocalFiles() {
+  const db = await openLocalDatabase();
+  return new Promise((resolve, reject) => {
+    const files = {};
+    const transaction = db.transaction('files');
+    const cursor = transaction.objectStore('files').openCursor();
+    cursor.onsuccess = () => {
+      const row = cursor.result;
+      if (row) { files[row.key] = row.value; row.continue(); }
+    };
+    transaction.oncomplete = () => resolve(files);
+    transaction.onerror = () => reject(transaction.error);
+  });
+}
+async function persistLocalFiles(files, replace = false) {
+  const db = await openLocalDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction('files', 'readwrite');
+    const store = transaction.objectStore('files');
+    if (replace) store.clear();
+    for (const [key, value] of Object.entries(files)) store.put(value, key);
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error || new Error('保存被中断'));
+  });
+}
+function enqueueLocalWrite(path, value) {
+  localFiles[path] = value;
+  localWrite = localWrite.then(() => persistLocalFiles({ [path]: value })).catch(err => {
+    localPersistenceError = err;
+    showToast('本地保存失败 · ' + err.message);
+    onLocalForeground(false);
+  });
+}
+function loadLocalEngineScript() {
+  if (window.ISHIT_LOCAL_WORKER_SOURCE) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'local-engine.js?v=021';
+    script.onload = resolve;
+    script.onerror = () => reject(new Error('本地引擎加载失败，请重新安装客户端'));
+    document.head.append(script);
+  });
+}
+function legacyOfflineFiles(raw) {
+  const old = JSON.parse(raw);
+  if (old.format !== 'ishit-offline' || old.version !== 1 || !Array.isArray(old.courses) || !Array.isArray(old.lessons))
+    throw new Error('旧版离线配置无法识别');
+  const uid = 'local-courses';
+  const profile = { coursesCache: old.courses.map(c => ({ courseId: c.id, classId: '', name: c.name, note: c.classroom })),
+    courseSettings: Object.fromEntries(old.courses.map(c => [c.id, { pollingEnabled: c.enabled }])),
+    diyLessons: old.lessons.map((l, i) => ({ id: 'legacy-' + i, isDiy: true, courseId: l.course,
+      name: old.courses.find(c => c.id === l.course)?.name || '课程', dayOfWeek: l.day, weeks: l.weeks,
+      startTime: l.start, endTime: l.end, enabled: l.enabled, pollingEnabled: l.enabled })),
+    useCurriculumSchedule: true, curriculumBufferMinutes: old.buffer, curriculumCache: null };
+  const store = { accounts: [{ uid, name: '旧版本地课表', platform: 'local', status: 'local', ownerUsername: old.name }],
+    currentUid: uid, userProfiles: { [uid]: profile }, schedule: { masterEnabled: old.enabled, intervalSeconds: old.interval },
+    panelAuth: { enabled: false, username: old.name, sessions: {}, users: [] } };
+  return { '/data/store.json': encodeLocalText(JSON.stringify(store)) };
+}
+async function startLocalEngine() {
+  if (localReady) return localReady;
+  localReady = (async () => {
+    await loadLocalEngineScript();
+    let files = await readLocalFiles();
+    if (!Object.keys(files).length && localStorage.getItem('ishit_offline_workspace_v1')) {
+      files = legacyOfflineFiles(localStorage.getItem('ishit_offline_workspace_v1'));
+      await persistLocalFiles(files, true);
+    }
+    if (files['/data/store.json']) validateLocalImport({ format: LOCAL_FORMAT, version: 2, files });
+    Object.assign(localFiles, files);
+    const blob = URL.createObjectURL(new Blob([window.ISHIT_LOCAL_WORKER_SOURCE], { type: 'application/javascript' }));
+    const worker = new Worker(blob);
+    URL.revokeObjectURL(blob);
+    localWorker = worker;
+    await new Promise((resolve, reject) => {
+      worker.onerror = event => reject(new Error(event.message || '本地引擎初始化失败'));
+      worker.onmessage = async event => {
+        const msg = event.data;
+        if (msg.type === 'ready') { resolve(); return; }
+        if (msg.type === 'initError') { reject(new Error(msg.error)); return; }
+        if (msg.type === 'persist') { enqueueLocalWrite(msg.path, msg.value); return; }
+        if (msg.type === 'network') { sendLocalHttp(msg, worker); return; }
+        if (msg.type === 'cancelNetwork') {
+          for (const [id, request] of localNetwork) {
+            if (request.worker === worker && request.id === msg.id) cancelLocalHttp(id);
+          }
+          return;
+        }
+        if (msg.type === 'result') {
+          const call = localCalls.get(msg.id);
+          if (!call) return;
+          localCalls.delete(msg.id);
+          await localWrite;
+          if (msg.error || (localPersistenceError && call.type !== 'snapshot')) call.reject(new Error(msg.error || localPersistenceError.message));
+          else call.resolve(msg.result);
+        }
+      };
+      worker.postMessage({ type: 'init', files, active: localActive });
+    });
+    await localWrite;
+  })();
+  try { await localReady; } catch (err) { localReady = null; stopLocalEngine(); throw err; }
+}
+function localRpc(type, args = {}) {
+  return new Promise((resolve, reject) => {
+    const id = ++localSequence;
+    localCalls.set(id, { resolve, reject, type });
+    localWorker.postMessage({ type, id, ...args });
+  });
+}
+async function localApi(url, method = 'GET', body = null) {
+  await startLocalEngine();
+  if (!url.startsWith('/api/')) throw new Error('本地接口路径无效');
+  const result = await localRpc('api', { url, method, body });
+  return result.json || JSON.parse(decodeLocalText(result.body));
+}
+function localAssetUrl(path) {
+  const bytes = localFiles['/data/comment_images/' + path.split('/').pop()];
+  if (!bytes) return '';
+  const previous = localAssetUrls.get(path);
+  if (previous?.bytes === bytes) return previous.url;
+  if (previous) URL.revokeObjectURL(previous.url);
+  const mime = path.endsWith('.png') ? 'image/png' : 'image/jpeg';
+  const url = URL.createObjectURL(new Blob([Uint8Array.from(atob(bytes), c => c.charCodeAt(0))], { type: mime }));
+  localAssetUrls.set(path, { bytes, url });
+  return url;
+}
+function cancelLocalHttp(id) {
+  localNetwork.delete(id);
+  if (window.IshitAndroidBridge?.cancelLocalRequest) window.IshitAndroidBridge.cancelLocalRequest(id);
+  else window.chrome?.webview?.postMessage('local:cancel:' + id);
+}
+function sendLocalHttp(request, worker) {
+  const id = localNetworkPrefix + '-' + (++localNetworkSequence);
+  if (!localActive) {
+    worker.postMessage({ type: 'networkResult', id: request.id, error: '请保持客户端在前台' });
+    return;
   }
-  return {
-    format: 'ishit-offline', version: 1, id: makeLocalId(), name: status?.panelAuth?.username || '本地用户',
-    enabled: status?.schedule?.masterEnabled !== false, interval: Number(status?.schedule?.intervalSeconds || 25),
-    buffer: Number(profile.curriculumBufferMinutes ?? 10), semester: semesterStart(Number(curriculum?.realCurrentWeek || 1)), courses, lessons
-  };
+  const payload = { ...request, id };
+  localNetwork.set(id, { worker, id: request.id });
+  if (window.IshitAndroidBridge?.localRequest) window.IshitAndroidBridge.localRequest(JSON.stringify(payload));
+  else if (window.chrome?.webview) window.chrome.webview.postMessage('local:http:' + JSON.stringify(payload));
+  else onLocalHttpResult({ id, error: '学习通本地请求需要 Windows 或 Android 客户端' });
 }
-
-function makeLocalId() {
-  return Array.from(crypto.getRandomValues(new Uint32Array(4)), v => v.toString(16).padStart(8, '0')).join('');
-}
-
-function validTime(value) {
-  return typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
-}
-
-function validateOffline(data) {
-  const text = v => typeof v === 'string' && v.trim().length > 0;
-  const integer = (v, min, max) => Number.isInteger(v) && v >= min && v <= max;
-  const bool = v => typeof v === 'boolean';
-  if (!data || data.format !== 'ishit-offline' || data.version !== 1 || !text(data.id) || !text(data.name) ||
-      !bool(data.enabled) || !integer(data.interval, 3, 300) || !integer(data.buffer, 0, 180) ||
-      !/^\d{4}-\d{2}-\d{2}$/.test(data.semester) || !Array.isArray(data.courses) || !Array.isArray(data.lessons)) throw Error('配置格式或版本不受支持');
-  const monday = new Date(data.semester + 'T00:00:00Z');
-  if (monday.getUTCDay() !== 1 || monday.toISOString().slice(0, 10) !== data.semester) throw Error('学期起始日期必须为周一');
-  const ids = new Set();
-  for (const c of data.courses) {
-    if (!c || !text(c.id) || ids.has(c.id) || !text(c.name) || typeof c.classroom !== 'string' || !bool(c.enabled)) throw Error('课程配置无效');
-    ids.add(c.id);
+window.onLocalHttpResult = raw => {
+  const result = typeof raw === 'string' ? JSON.parse(raw) : raw;
+  const pending = localNetwork.get(String(result.id));
+  if (!pending) return;
+  localNetwork.delete(String(result.id));
+  pending.worker.postMessage({ ...result, type: 'networkResult', id: pending.id });
+};
+window.onLocalForeground = active => {
+  localActive = Boolean(active) && !document.hidden && !localPersistenceError;
+  localWorker?.postMessage({ type: 'foreground', active: localActive });
+  if (!localActive) {
+    for (const [id, pending] of localNetwork) {
+      pending.worker.postMessage({ type: 'networkResult', id: pending.id, error: '客户端进入后台，请回到前台后继续' });
+      cancelLocalHttp(id);
+    }
   }
-  for (const l of data.lessons) {
-    if (!l || !ids.has(l.course) || !integer(l.day, 1, 7) || !validTime(l.start) || !validTime(l.end) ||
-        l.end <= l.start || !bool(l.enabled) || !Array.isArray(l.weeks) ||
-        !l.weeks.every(w => integer(w, 1, 100))) throw Error('排课时间、周次或课程引用无效');
-  }
-  return data;
-}
+  const label = document.getElementById('localModeStatus');
+  if (label) label.textContent = localActive ? '离线模式 · 本机运行' : '离线模式 · 后台已暂停';
+};
+document.addEventListener('visibilitychange', () => onLocalForeground(!document.hidden));
+window.addEventListener('blur', () => onLocalForeground(false));
+window.addEventListener('focus', () => onLocalForeground(true));
 
-function saveOffline(next) {
-  validateOffline(next);
-  localStorage.setItem(OFFLINE_KEY, JSON.stringify(next));
-  offlineData = next;
+function stopLocalEngine() {
+  for (const id of localNetwork.keys()) cancelLocalHttp(id);
+  localWorker?.terminate();
+  localWorker = null;
+  localReady = null;
+  for (const call of localCalls.values()) call.reject(new Error('本地引擎已停止'));
+  localCalls.clear();
 }
-
-function enterOfflineMode() {
+async function enterOfflineMode() {
   try {
-    if (!localStorage.getItem(OFFLINE_KEY)) saveOffline(createLocalProfile(state.status));
+    await localWrite;
     window.IshitAndroidBridge?.setOfflineMode?.(true);
     localStorage.setItem(MODE_KEY, 'offline');
     location.reload();
   } catch (err) { showToast(err.message); }
 }
-
-function leaveOfflineMode() {
+async function leaveOfflineMode() {
+  onLocalForeground(false);
+  await localWrite;
+  if (localPersistenceError) { showToast('请先导出配置 · ' + localPersistenceError.message); return; }
+  stopLocalEngine();
   localStorage.removeItem(MODE_KEY);
   window.IshitAndroidBridge?.setOfflineMode?.(false);
   location.replace(location.pathname);
 }
-
-function lessonNamesNow(data, now) {
-  const day = (now.getDay() + 6) % 7 + 1;
-  const date = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
-  const week = Math.floor((date - Date.parse(data.semester)) / 604800000) + 1;
-  const minutes = now.getHours() * 60 + now.getMinutes();
-  const toMinutes = t => Number(t.slice(0, 2)) * 60 + Number(t.slice(3));
-  const active = data.lessons.filter(l => data.enabled && l.enabled && l.day === day &&
-    (!l.weeks.length || l.weeks.includes(week)) && minutes >= toMinutes(l.start) - data.buffer &&
-    minutes <= toMinutes(l.end) + data.buffer);
-  return data.courses.filter(c => c.enabled && active.some(l => l.course === c.id)).map(c => c.name);
+function toggleClientMode() {
+  if (isOfflineMode()) leaveOfflineMode();
+  else enterOfflineMode();
 }
-
-function updateOfflineClock() {
-  clearTimeout(offlineTick);
-  if (!offlineData || document.hidden || !document.hasFocus()) return;
-  const names = lessonNamesNow(offlineData, new Date());
-  localEl('now').textContent = !offlineData.enabled ? '课表检查已暂停' : names.length ? '当前课程 · ' + names.join('、') : '当前时段没有启用的课程';
-  if (offlineData.enabled) offlineTick = setTimeout(updateOfflineClock, offlineData.interval * 1000);
-}
-
-function renderOffline() {
-  const d = offlineData;
-  for (const key of ['name', 'semester', 'buffer', 'interval']) localEl(key).value = d[key];
-  localEl('enabled').checked = d.enabled;
-  const select = localEl('course');
-  const previous = select.value;
-  select.replaceChildren(...d.courses.map(c => new Option(c.name + (c.classroom ? ' · ' + c.classroom : ''), c.id)));
-  if (d.courses.some(c => c.id === previous)) select.value = previous;
-  localEl('add-lesson').disabled = !d.courses.length;
-  const list = localEl('list');
-  list.replaceChildren();
-  const button = (label, fn) => {
-    const b = document.createElement('button');
-    b.className = 'btn btn-ghost btn-sm'; b.textContent = label; b.onclick = fn;
-    return b;
-  };
-  for (const c of d.courses) {
-    const group = document.createElement('section');
-    const title = document.createElement('h3'); title.textContent = c.name + (c.classroom ? ' · ' + c.classroom : '');
-    group.append(title, button(c.enabled ? '暂停本课' : '启用本课', () => editOffline(n => { n.courses.find(x => x.id === c.id).enabled = !c.enabled; })),
-      button('删除课程', () => {
-        if (confirm('删除《' + c.name + '》及其排课？')) editOffline(n => {
-          n.courses = n.courses.filter(x => x.id !== c.id); n.lessons = n.lessons.filter(x => x.course !== c.id);
-        });
-      }));
-    d.lessons.forEach((l, index) => {
-      if (l.course !== c.id) return;
-      const row = document.createElement('div'); row.className = 'list-row';
-      const span = document.createElement('span');
-      span.textContent = '周' + weekdays[l.day - 1] + ' ' + l.start + '–' + l.end + ' · ' + (l.weeks.length ? '第 ' + l.weeks.join('、') + ' 周' : '每周') + (l.enabled ? '' : ' · 已暂停');
-      row.append(span, button(l.enabled ? '暂停时段' : '启用时段', () => editOffline(n => { n.lessons[index].enabled = !l.enabled; })),
-        button('移除', () => editOffline(n => n.lessons.splice(index, 1))));
-      group.append(row);
-    });
-    list.append(group);
-  }
-  if (!d.courses.length) list.textContent = '尚无本地课程';
-  updateOfflineClock();
-}
-
-function editOffline(change) {
+async function exportOffline() {
   try {
-    const next = JSON.parse(JSON.stringify(offlineData));
-    change(next); saveOffline(next); renderOffline();
-    return true;
-  } catch (err) { showToast(err.message); return false; }
+    const snapshot = await localRpc('snapshot');
+    snapshot.preferences = {
+      helperName: localStorage.getItem('ishit_helper_name') || '',
+      helperStudentId: localStorage.getItem('ishit_helper_sid') || ''
+    };
+    const json = JSON.stringify(snapshot, null, 2);
+    if (window.IshitAndroidBridge?.exportOfflineConfig) { window.IshitAndroidBridge.exportOfflineConfig(json); return; }
+    const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = 'ISHIT-offline.json'; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+  } catch (err) { showToast('导出失败 · ' + err.message); }
 }
-
-function exportOffline() {
-  const json = JSON.stringify(offlineData, null, 2);
-  if (window.IshitAndroidBridge?.exportOfflineConfig) {
-    window.IshitAndroidBridge.exportOfflineConfig(json);
-    return;
+function validateLocalImport(data) {
+  if (data.format === 'ishit-offline' && data.version === 1) return legacyOfflineFiles(JSON.stringify(data));
+  if (data.format !== LOCAL_FORMAT || data.version !== 2 || !data.files || typeof data.files !== 'object' || Array.isArray(data.files))
+    throw new Error('配置格式或版本不受支持');
+  const files = data.files;
+  const raw = files['/data/store.json'];
+  if (typeof raw !== 'string') throw new Error('配置缺少账号数据');
+  for (const [key, value] of Object.entries(files)) {
+    if (!(key === '/data/store.json' || /^\/data\/comment_images\/[\w.-]+$/.test(key)) || typeof value !== 'string')
+      throw new Error('配置包含无效文件');
+    atob(value);
   }
-  const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
-  const a = document.createElement('a'); a.href = url; a.download = 'ISHIT-offline.json';
-  document.body.append(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 30000);
+  const store = JSON.parse(decodeLocalText(raw));
+  if (!Array.isArray(store.accounts) || !store.userProfiles || typeof store.userProfiles !== 'object' ||
+      !store.schedule || typeof store.schedule !== 'object' || !store.panelAuth?.username)
+    throw new Error('账号或课表配置不完整');
+  const seen = new Set();
+  for (const account of store.accounts) {
+    if (!account?.uid || seen.has(String(account.uid))) throw new Error('账号标识重复或缺失');
+    seen.add(String(account.uid));
+  }
+  for (const profile of Object.values(store.userProfiles)) {
+    if (!profile || !Array.isArray(profile.coursesCache) || !Array.isArray(profile.diyLessons) ||
+        !profile.courseSettings || typeof profile.courseSettings !== 'object') throw new Error('课程配置无效');
+  }
+  return files;
 }
-
-function openOfflineWorkspace() {
-  document.documentElement.classList.add('offline-mode');
-  document.getElementById('offline-workspace').hidden = false;
-  const caption = document.querySelector('#panelLoginApp .win-login-titlebar');
-  if (caption) localEl('workspace').prepend(caption.cloneNode(true));
-  const file = localEl('file');
-  file.onchange = async () => {
-    try {
-      if (!file.files.length) return;
-      const next = validateOffline(JSON.parse(await file.files[0].text()));
-      if (offlineData && !confirm('用导入文件替换当前设备的全部离线配置？')) return;
-      saveOffline(next); renderOffline(); showToast('已导入全部离线配置');
-    } catch (err) { showToast('导入失败 · ' + err.message); }
-    finally { file.value = ''; }
-  };
-  localEl('settings').onsubmit = e => {
-    e.preventDefault();
-    if (editOffline(n => {
-      n.name = localEl('name').value.trim(); n.enabled = localEl('enabled').checked;
-      n.interval = Number(localEl('interval').value); n.buffer = Number(localEl('buffer').value); n.semester = localEl('semester').value;
-    })) showToast('设置已保存');
-  };
-  localEl('new-course').onsubmit = e => {
-    e.preventDefault();
-    if (editOffline(n => n.courses.push({ id: makeLocalId(), name: localEl('title').value.trim(),
-      classroom: localEl('room').value.trim(), enabled: true }))) e.target.reset();
-  };
-  localEl('new-lesson').onsubmit = e => {
-    e.preventDefault();
-    const weeks = localEl('weeks').value.trim();
-    editOffline(n => n.lessons.push({ course: localEl('course').value, day: Number(localEl('day').value),
-      start: localEl('start').value, end: localEl('end').value, enabled: true,
-      weeks: weeks ? [...new Set(weeks.split(/[,，\s]+/).map(Number))] : [] }));
-  };
-  document.addEventListener('visibilitychange', updateOfflineClock);
-  window.addEventListener('focus', updateOfflineClock);
-  window.addEventListener('blur', () => clearTimeout(offlineTick));
+async function importOfflineFile(input) {
+  if (!input.files.length) return;
   try {
-    const raw = localStorage.getItem(OFFLINE_KEY);
-    if (raw === null) saveOffline(createLocalProfile(null));
-    else offlineData = validateOffline(JSON.parse(raw));
-    renderOffline();
-  } catch (err) { localEl('now').textContent = '本地配置读取失败，请导入备份 · ' + err.message; }
+    const data = JSON.parse(await input.files[0].text());
+    const files = validateLocalImport(data);
+    if (!confirm('将用备份替换本机全部离线账号、课程、设置和记录，是否继续？')) return;
+    onLocalForeground(false);
+    stopLocalEngine();
+    await localWrite;
+    await persistLocalFiles(files, true);
+    if (data.preferences) {
+      localStorage.setItem('ishit_helper_name', String(data.preferences.helperName || ''));
+      localStorage.setItem('ishit_helper_sid', String(data.preferences.helperStudentId || ''));
+    }
+    location.reload();
+  } catch (err) {
+    showToast('导入失败 · ' + err.message);
+    if (!localWorker) { localActive = !document.hidden; await startLocalEngine(); }
+  } finally { input.value = ''; }
+}
+async function openOfflineShare() {
+  const url = document.getElementById('localShareInput').value.trim();
+  if (!url) return showToast('请输入分享链接');
+  try {
+    const result = await localApi('/api/local/helper/open', 'POST', { url });
+    if (result.login) { switchMainModule('settings'); switchSettingsSubTab('accounts'); }
+    else openInAppBountyAssist(result.token);
+  } catch (err) { showToast(err.message); }
+}
+function applyOfflineUi() {
+  document.documentElement.classList.toggle('offline-mode', isOfflineMode());
+  document.querySelectorAll('[data-mode-button]').forEach(el => {
+    el.textContent = isOfflineMode() ? '切回在线模式' : '进入离线模式';
+  });
+  onLocalForeground(localActive);
 }

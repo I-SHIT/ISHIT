@@ -7,7 +7,7 @@
   <link rel="icon" type="image/png" href="favicon.png?v=8" />
   <link rel="shortcut icon" type="image/png" href="favicon.png?v=8" />
   <link rel="stylesheet" href="vendor/leaflet/leaflet.css?v=194" />
-  <link rel="stylesheet" href="style.css?v=14" />
+  <link rel="stylesheet" href="style.css?v=15" />
   <script src="vendor/leaflet/leaflet.js?v=194"></script>
   <script src="jsqr.js?v=9"></script>
 </head>
@@ -121,45 +121,7 @@
   </div>
 </div>
 
-<main id="offline-workspace" hidden>
-  <header class="topbar"><h1>离线课表</h1><button class="btn btn-ghost" onclick="leaveOfflineMode()">切回在线模式</button></header>
-  <p id="offline-now" role="status"></p>
-  <div class="grid-2">
-    <section class="panel">
-      <h2>课程与排课</h2>
-      <div id="offline-list"></div>
-      <form id="offline-new-course">
-        <label>课程名称<input id="offline-title" required></label>
-        <label>班级或教室<input id="offline-room"></label>
-        <button class="btn">添加课程</button>
-      </form>
-      <form id="offline-new-lesson">
-        <label>排课课程<select id="offline-course" required></select></label>
-        <label>星期<select id="offline-day"><option value="1">周一</option><option value="2">周二</option><option value="3">周三</option><option value="4">周四</option><option value="5">周五</option><option value="6">周六</option><option value="7">周日</option></select></label>
-        <div class="row"><label>开始<input type="time" id="offline-start" value="08:00" required></label>
-          <label>结束<input type="time" id="offline-end" value="09:40" required></label></div>
-        <label>教学周<input id="offline-weeks" placeholder="留空为每周，指定周次用逗号分隔"></label>
-        <button class="btn" id="offline-add-lesson">添加时段</button>
-      </form>
-    </section>
-    <section class="panel">
-      <h2>本机设置</h2>
-      <form id="offline-settings">
-        <label>本地账号名称<input id="offline-name" required></label>
-        <label>学期第一周的周一<input id="offline-semester" type="date" required></label>
-        <label>课前课后缓冲（分钟）<input id="offline-buffer" type="number" min="0" max="180" required></label>
-        <label>前台课表检查间隔（秒）<input id="offline-interval" type="number" min="3" max="300" required></label>
-        <label><input id="offline-enabled" type="checkbox"> 启用前台课表检查</label>
-        <button class="btn">保存设置</button>
-      </form>
-      <h2>配置迁移</h2>
-      <p>备份包含本地账号、全部课程、排课和前台检查设置。</p>
-      <div class="row"><button class="btn btn-ghost" onclick="exportOffline()">导出全部配置</button>
-        <button class="btn btn-ghost" onclick="document.getElementById('offline-file').click()">导入配置文件</button></div>
-      <input id="offline-file" type="file" accept=".json,application/json" hidden>
-    </section>
-  </div>
-</main>
+
 
 <!-- 面板访问登录页（未认证或更换设备/浏览器访问时展示，无注册入口） -->
 <div id="panelLoginApp" class="layout" style="display:none; max-width:380px; padding-top:12vh;">
@@ -190,7 +152,7 @@
     <label style="margin-top:10px;">访问密码</label>
     <input id="panelAuthPassword" type="password" placeholder="请输入访问密码" autocomplete="current-password" onkeydown="if(event.key==='Enter')submitPanelLogin()" />
     <button class="btn" style="width:100%; margin-top:18px;" onclick="submitPanelLogin()">登录</button>
-    <button type="button" class="btn btn-ghost" onclick="enterOfflineMode()">进入离线模式</button>
+    <button type="button" class="btn btn-ghost" data-mode-button onclick="toggleClientMode()">进入离线模式</button>
     <div id="panelAuthError" style="margin-top:10px; font-size:12px; color:var(--muted); text-align:center;">仅限后台授权账号访问</div>
   </div>
 </div>
@@ -374,6 +336,13 @@
 
   <!-- ==================== 独立板块：签到悬赏与签到大师排行榜 ==================== -->
   <section id="module-bounty" class="module-pane" style="display:none;">
+      <div class="panel offline-only">
+        <div class="panel-head"><span class="panel-title">打开分享链接</span></div>
+        <div class="row"><input id="localShareInput" placeholder="粘贴 ISHIT 协助链接" style="flex:1">
+        <button class="btn" onclick="openOfflineShare()">打开</button></div>
+        <p style="margin-top:8px;color:var(--muted);">读取分享活动后，使用本机绑定的课程账号进行处理。</p>
+      </div>
+
     <div class="panel" style="margin-bottom:14px;">
       <div class="row" style="justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
         <div>
@@ -775,8 +744,18 @@
 
     <!-- 3.4 后台用户管理设置（个人账号密码修改 + Admin 专属网站用户管理） -->
     <div id="settings-pane-security" class="sub-pane" style="display:none;">
-      <button type="button" class="btn btn-ghost" onclick="enterOfflineMode()">进入离线模式</button>
-      <div class="grid-2">
+      <button type="button" class="btn btn-ghost" data-mode-button onclick="toggleClientMode()">进入离线模式</button>
+      <div class="panel offline-only">
+        <div class="panel-head"><span class="panel-title">本机数据</span><span id="localModeStatus" class="tag"></span></div>
+        <p>账号、课程、课表、轮询、预设、推送配置和记录均保存在本机。自动签到需要保持客户端在前台。</p>
+        <div class="row" style="margin-top:12px;">
+          <button class="btn" onclick="exportOffline()">导出全部配置</button>
+          <button class="btn btn-ghost" onclick="document.getElementById('offlineImportFile').click()">导入全部配置</button>
+        </div>
+        <input id="offlineImportFile" type="file" accept=".json,application/json" hidden onchange="importOfflineFile(this)">
+        <p style="margin-top:8px;color:var(--muted);">备份包含学习通登录凭据，请妥善保管。</p>
+      </div>
+      <div class="grid-2 online-only">
         <div class="panel">
           <div class="panel-head">
             <div>
@@ -1469,8 +1448,8 @@
   </div>
 </div>
 
-<script src="offline.js?v=1"></script>
-<script src="app.js?v=27"></script>
+<script src="offline.js?v=021"></script>
+<script src="app.js?v=28"></script>
 </body>
 </html>
 

@@ -12,6 +12,19 @@ public class NativeBridge {
     }
 
     @JavascriptInterface
+    public void localRequest(String request) { act.runOnUiThread(new LocalRequest(act, request)); }
+
+    @JavascriptInterface
+    public void cancelLocalRequest(String id) { act.localTransport.cancel(id); }
+
+    private static final class LocalRequest implements Runnable {
+        private final MainActivity act;
+        private final String request;
+        LocalRequest(MainActivity act, String request) { this.act = act; this.request = request; }
+        @Override public void run() { if (act.isLocalPage()) act.localTransport.send(request); }
+    }
+
+    @JavascriptInterface
     public void setOfflineMode(boolean enabled) {
         act.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
             .edit().putBoolean("offline_mode", enabled).commit();

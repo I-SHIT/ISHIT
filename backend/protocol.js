@@ -253,8 +253,9 @@ class CXProtocol {
 
   static async getActiveList(courseId, classId, cpi, userId = store.currentUid) {
     if (!userId) return [];
-    CXProtocol._signTypeCache ||= {};
-    CXProtocol._joinTimeCache ||= {};
+    CXProtocol._signTypeCache = CXProtocol._signTypeCache || {};
+    CXProtocol._activityUrls = CXProtocol._activityUrls || {};
+    CXProtocol._joinTimeCache = CXProtocol._joinTimeCache || {};
     const cdKey = [userId, courseId, classId].join('_');
     const cooldown = CXProtocol.activityCooldown;
     if (cooldown && cooldown.until > Date.now()) throw cooldown.error;
@@ -343,6 +344,7 @@ class CXProtocol {
         for (const item of taskData.activeList) {
           if (!item) continue;
           const id = String(item.id ?? '').trim();
+          if (item.url) CXProtocol._activityUrls[userId + "_" + id] = String(item.url);
           const activeType = Number(item.activeType || 0);
           const status = Number(item.status) === 1;
           const isSignActivity = Boolean(id) && [2, 54, 74].includes(activeType);
@@ -411,6 +413,7 @@ class CXProtocol {
       for (const w of webTaskData.data.activeList) {
         if (!w) continue;
         const id = String(w.id ?? '').trim();
+        if (w.url) CXProtocol._activityUrls[userId + "_" + id] = String(w.url);
         const activeType = Number(w.activeType ?? w.type ?? 0);
         const status = Number(w.status) === 1;
         const isSignActivity = Boolean(id) && [2, 54, 74].includes(activeType);
@@ -439,6 +442,16 @@ class CXProtocol {
     }
 
     throw new Error('学习通活动列表格式无法识别');
+  }
+
+  static async getSignReferer(activeId, courseId, classId, cpi, userId) {
+    let url = this._activityUrls?.[userId + "_" + activeId];
+    if (!url && courseId && classId) {
+      const activities = await this.getActiveList(courseId, classId, cpi, userId);
+      url = activities.find(activity => String(activity.id) === String(activeId))?.url;
+    }
+    return url || 'https://mobilelearn.chaoxing.com/widget/sign/pcStuSignController/preSign?activeId=' +
+      encodeURIComponent(activeId) + '&classId=' + encodeURIComponent(classId) + '&courseId=' + encodeURIComponent(courseId);
   }
 
   static async getActiveInfoWeb(activeId, userId = store.currentUid) {

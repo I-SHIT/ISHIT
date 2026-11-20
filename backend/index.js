@@ -387,6 +387,8 @@ async function cxRequest(urlStr, {
   rawBuffer = false,
   allowRedirects = true,
 } = {}) {
+  if (globalThis.ISHIT_LOCAL_CLIENT && (store.accounts || []).some(a => a.uid === userId && a.platform === 'local'))
+    throw new Error('该账号是旧版本地课表，请先绑定学习通账号后复制课表');
   let targetUrl = new URL(urlStr);
   if (params && typeof params === 'object') {
     for (const [k, v] of Object.entries(params)) {

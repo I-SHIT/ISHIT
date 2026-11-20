@@ -627,6 +627,15 @@ function getPublicBaseUrlClean() {
   return rawBaseUrl.replace(/\/+$/, '');
 }
 
+function getHelperShareUrl(session) {
+  const base = getPublicBaseUrlClean();
+  if (!globalThis.ISHIT_LOCAL_CLIENT) return base + '/?help=' + session.token;
+  const fields = ['mode', 'title', 'courseId', 'classId', 'cpi', 'courseName', 'activeId', 'activeName',
+    'signType', 'signTypeLabel', 'designatedPlace', 'locationRange', 'needLocation', 'needPhoto', 'expiresAt'];
+  const activity = Object.fromEntries(fields.map(key => [key, session[key]]));
+  return base + '/?localShare=' + encodeURIComponent(Buffer.from(JSON.stringify(activity)).toString('base64'));
+}
+
 function createHelperSession({
   mode = 'sign',
   title = '协助签到',
@@ -1276,6 +1285,7 @@ async function performSingleAccountSign({
 
   const deviceCode = EncryptionUtil.getDeviceCode();
   const signUrl = 'https://mobilelearn.chaoxing.com/pptSign/stuSignajax';
+  const signHeaders = { Referer: await CXProtocol.getSignReferer(activeId, courseId, classId, cpi, user.uid) };
   let rawResp = null;
 
   if (signType === 'normal') {
@@ -1301,13 +1311,13 @@ async function performSingleAccountSign({
     if (validate) baseParams.validate = validate;
 
     if (chosenObjId) {
-      rawResp = await cxRequest(signUrl, {
+      rawResp = await cxRequest(signUrl, { headers: signHeaders,
         method: 'POST',
         body: { ...baseParams, objectId: chosenObjId },
         userId: user.uid,
       });
     } else {
-      rawResp = await cxRequest(signUrl, {
+      rawResp = await cxRequest(signUrl, { headers: signHeaders,
         method: 'GET',
         params: baseParams,
         userId: user.uid,
@@ -1336,7 +1346,7 @@ async function performSingleAccountSign({
       locationResult: loc.locationResultJson,
     };
     if (validate) formData.validate = validate;
-    rawResp = await cxRequest(signUrl, { method: 'POST', body: formData, userId: user.uid });
+    rawResp = await cxRequest(signUrl, { headers: signHeaders, method: 'POST', body: formData, userId: user.uid });
   } else if (signType === 'code' || signType === 'pattern') {
     const loc = CXProtocol.buildLocationPayload(user, resolvedAddress, resolvedLat, resolvedLng, coordSystem);
     const formData = {
@@ -1358,7 +1368,7 @@ async function performSingleAccountSign({
       faceEnc: faceParams.faceEnc || '',
     };
     if (validate) formData.validate = validate;
-    rawResp = await cxRequest(signUrl, { method: 'POST', body: formData, userId: user.uid });
+    rawResp = await cxRequest(signUrl, { headers: signHeaders, method: 'POST', body: formData, userId: user.uid });
   } else if (signType === 'qrCode') {
     const loc = CXProtocol.buildLocationPayload(user, resolvedAddress, resolvedLat, resolvedLng, coordSystem);
     const formData = {
@@ -1384,7 +1394,7 @@ async function performSingleAccountSign({
     if (signCode) formData.signCode = String(signCode);
     if (validate) formData.validate = validate;
     if (enc2) formData.enc2 = enc2;
-    rawResp = await cxRequest(signUrl, { method: 'POST', body: formData, userId: user.uid });
+    rawResp = await cxRequest(signUrl, { headers: signHeaders, method: 'POST', body: formData, userId: user.uid });
   }
 
   return typeof rawResp === 'string' ? rawResp.trim() : JSON.stringify(rawResp || '');
@@ -1877,8 +1887,7 @@ async function executeSignForActive({
       captchaKey: needCaptchaKey,
     });
     activeHelperToken = hs.token;
-    const baseUrl = getPublicBaseUrlClean();
-    helperShareUrl = `${baseUrl}/?help=${hs.token}`;
+    helperShareUrl = getHelperShareUrl(hs);
   }
 
   if (succeededUsers.length > 0) {
@@ -2172,6 +2181,7 @@ async function collectEnabledClassEntries(onlyUids = null) {
   const allowedUidSet = Array.isArray(onlyUids) ? new Set(onlyUids.map(String)) : null;
 
   for (const acc of store.accounts || []) {
+    if (acc.platform === 'local') continue;
     if (allowedUidSet && !allowedUidSet.has(String(acc.uid))) continue;
     const uid = acc.uid;
     const schedule = getAccountActiveScheduleStatus(uid);
@@ -2349,7 +2359,7 @@ async function pollCoursesOnce({ triggerSource = '自动轮询', onlyUids = null
               targetUids: deferredUids,
               targetNames: deferredNameList,
               helperToken: waitHs.token,
-              shareUrl: `${getPublicBaseUrlClean()}/?help=${waitHs.token}`,
+              shareUrl: getHelperShareUrl(waitHs),
               urgent: true,
               dedupKey: `detect_${act.id}_${deferredUids.slice().sort().join(',')}`,
             });
@@ -2418,7 +2428,7 @@ async function pollCoursesOnce({ triggerSource = '自动轮询', onlyUids = null
               store.handledActiveKeys.push(handledKey);
             }
             saveStore();
-            await executeSignForActive({
+            const record = await executeSignForActive({
               courseId: course.courseId,
               classId: course.classId,
               cpi: course.cpi,
@@ -2428,6 +2438,14 @@ async function pollCoursesOnce({ triggerSource = '自动轮询', onlyUids = null
               targetUids: readyUids,
               triggerSource,
             });
+            if (globalThis.ISHIT_LOCAL_CLIENT) {
+              const interrupted = record.results.filter(result => /前台|进入后台|已暂停/.test(result.msg || ''));
+              if (interrupted.length) {
+                const retryKeys = new Set([handledKey, ...interrupted.map(result => `${act.id}_${result.uid}`)]);
+                store.handledActiveKeys = store.handledActiveKeys.filter(key => !retryKeys.has(key));
+                saveStore();
+              }
+            }
           }
         }
       }
@@ -3071,7 +3089,6 @@ async function syncActiveBountiesNow(options = {}) {
 
 function getActiveBountiesForUser({ myCourseIds = new Set(), myClassIds = new Set(), myCourseNames = new Set(), myOwnedUids = [] } = {}) {
   const now = Date.now();
-  const baseUrl = getPublicBaseUrlClean();
   const ownedSet = new Set((myOwnedUids || []).map(String));
   const rawList = (store.helperSessions || []).filter((hs) => {
     if (!hs || hs.completed || hs.expired) return false;
@@ -3134,7 +3151,7 @@ function getActiveBountiesForUser({ myCourseIds = new Set(), myClassIds = new Se
       createdAt: Number(hs.createdAt || now),
       updatedAt: Number(hs.updatedAt || hs.createdAt || now),
       expiresAt: Number(hs.expiresAt || now + 1800000),
-      shareUrl: `${baseUrl}/?help=${hs.token}`,
+      shareUrl: getHelperShareUrl(hs),
       isMyCourse: Boolean(isMyCourse),
       includesMe: Boolean(includesMe),
     });
@@ -3396,6 +3413,14 @@ function getEffectiveTimerIntervalSeconds() {
   return valid.length > 0 ? Math.max(3, Math.min(...valid)) : 15;
 }
 
+function stopScheduler() {
+  clearInterval(pollTimer);
+  clearInterval(qrWatchTimer);
+  clearInterval(protectWatchTimer);
+  clearTimeout(immediatePollTimer);
+  pollTimer = qrWatchTimer = protectWatchTimer = immediatePollTimer = null;
+}
+
 function restartScheduler(triggerImmediate = true) {
   if (pollTimer) clearInterval(pollTimer);
   const sec = getEffectiveTimerIntervalSeconds();
@@ -3422,6 +3447,7 @@ module.exports = {
   decodeQrFromImageBuffer,
   broadcastNapCat,
   getPublicBaseUrlClean,
+  getHelperShareUrl,
   createHelperSession,
   getHelperSession,
   pushRealtimeSignAlert,
@@ -3444,6 +3470,7 @@ module.exports = {
   pollCoursesOnce,
   getEffectiveTimerIntervalSeconds,
   restartScheduler,
+  stopScheduler,
   getEngineState: () => {
     const summary = getGlobalScheduleSummary();
     return {

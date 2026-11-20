@@ -46,6 +46,7 @@ public class MainActivity extends Activity {
 
     public static volatile MainActivity sActiveInstance = null;
     public WebView webView;
+    public final LocalTransport localTransport = new LocalTransport(this);
     public ValueCallback<Uri[]> filePathCallback;
     public String pendingNotifyPayload = null;
     private int notifySeq = 2000;
@@ -116,6 +117,8 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        localTransport.setForeground(true);
+        if (webView != null) webView.evaluateJavascript("window.onLocalForeground && window.onLocalForeground(true);", null);
         sActiveInstance = this;
         KeepAlivePollService.purgeLegacyGuardNotification(this);
         startKeepAliveServiceSafe();
@@ -124,12 +127,25 @@ public class MainActivity extends Activity {
         }
     }
 
+    public boolean isLocalPage() {
+        return webView != null && webView.getUrl() != null &&
+            LOCAL_ASSET_INDEX.equals(Uri.parse(webView.getUrl()).buildUpon().clearQuery().fragment(null).toString());
+    }
+
+    @Override
+    protected void onPause() {
+        localTransport.setForeground(false);
+        if (webView != null) webView.evaluateJavascript("window.onLocalForeground && window.onLocalForeground(false);", null);
+        super.onPause();
+    }
+
     @Override
     protected void onDestroy() {
         if (sActiveInstance == this) {
             sActiveInstance = null;
         }
         KeepAlivePollService.scheduleResurrectionRelay(this, 2000L);
+        localTransport.close();
         super.onDestroy();
     }
 

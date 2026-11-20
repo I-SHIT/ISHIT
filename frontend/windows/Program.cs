@@ -26,6 +26,7 @@ namespace ISHIT.Desktop
 
     public class MainForm : Form
     {
+        private readonly LocalTransport localTransport = new LocalTransport();
         private WebView2 _webView = null!;
         private NotifyIcon _trayIcon = null!;
         private bool _isCustomMaximized = false;
@@ -92,6 +93,9 @@ namespace ISHIT.Desktop
         public MainForm()
         {
             Text = "ISHIT";
+            Activated += (_, __) => SetLocalForeground(true);
+            Deactivate += (_, __) => SetLocalForeground(false);
+            FormClosed += (_, __) => localTransport.Dispose();
             Width = 1280;
             Height = 840;
             MinimumSize = new Size(960, 640);
@@ -445,6 +449,13 @@ namespace ISHIT.Desktop
             };
         }
 
+        private void SetLocalForeground(bool active)
+        {
+            localTransport.SetForeground(active);
+            if (_webView != null && _webView.CoreWebView2 != null)
+                _webView.CoreWebView2.ExecuteScriptAsync("window.onLocalForeground && window.onLocalForeground(" + (active ? "true" : "false") + ");");
+        }
+
         private void ShowMainWindow()
         {
             Show();
@@ -513,11 +524,22 @@ namespace ISHIT.Desktop
                 settings.IsStatusBarEnabled = false;
                 settings.IsZoomControlEnabled = true;
 
-                _webView.CoreWebView2.WebMessageReceived += (_, args) =>
+                _webView.CoreWebView2.WebMessageReceived += async (_, args) =>
                 {
                     try
                     {
                         string msg = args.TryGetWebMessageAsString();
+                        if (args.Source.StartsWith("https://ishit.local/", StringComparison.OrdinalIgnoreCase) && msg.StartsWith("local:http:"))
+                        {
+                            var response = await localTransport.SendAsync(msg.Substring(11));
+                            if (!_webView.IsDisposed) await _webView.CoreWebView2.ExecuteScriptAsync("window.onLocalHttpResult && window.onLocalHttpResult(" + response + ");");
+                            return;
+                        }
+                        if (args.Source.StartsWith("https://ishit.local/", StringComparison.OrdinalIgnoreCase) && msg.StartsWith("local:cancel:"))
+                        {
+                            localTransport.Cancel(msg.Substring(13));
+                            return;
+                        }
                         if (!string.IsNullOrEmpty(msg))
                         {
                             if (this.InvokeRequired)

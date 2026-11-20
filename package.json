@@ -2,14 +2,22 @@
   "main": "backend/server.js",
   "scripts": {
     "start": "node backend/server.js",
-    "start:backend": "node backend/server.js"
+    "start:backend": "node backend/server.js",
+    "build:local": "node frontend/local/build.js"
   },
   "description": "ISHIT ChaoXing Decoupled Backend API & Multi-Platform Frontends (Web / Windows / Android)",
   "version": "0.0.0-beta",
   "dependencies": {
-    "jsqr": "^1.4.0",
     "jpeg-js": "^0.4.4",
+    "jsqr": "^1.4.0",
     "pngjs": "^7.0.0"
   },
-  "name": "ishit-chaoxing-suite"
+  "name": "ishit-chaoxing-suite",
+  "devDependencies": {
+    "browserify": "^17.0.1",
+    "buffer": "^6.0.3",
+    "crypto-browserify": "^3.12.1",
+    "path-browserify": "^1.0.1",
+    "playwright-core": "^1.65.1"
+  }
 }

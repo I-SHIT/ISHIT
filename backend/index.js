@@ -170,7 +170,6 @@ const defaultStore = {
   pendingCaptchas: {},
   schedule: {
     masterEnabled: true,
-    forcePolling: false,
     intervalSeconds: 25,
     signThresholdEnabled: false,
     signThresholdRatio: 0.3,
@@ -225,6 +224,9 @@ if (fs.existsSync(STORE_FILE)) {
             : String(loaded.napcat.publicBaseUrl).trim().replace(/\/+$/, ''),
       },
     };
+    for (const cfg of [store.schedule, ...Object.values(store.userScheduleConfigs)]) {
+      if (cfg) delete cfg.forcePolling;
+    }
     if (store.accounts && store.accounts.length > 0) {
       for (const acc of store.accounts) {
         if (!store.userProfiles[acc.uid]) {
@@ -233,6 +235,14 @@ if (fs.existsSync(STORE_FILE)) {
           if (loaded.coursesCache) prof.coursesCache = [...loaded.coursesCache];
           store.userProfiles[acc.uid] = prof;
         }
+      }
+    }
+    for (const profile of Object.values(store.userProfiles)) {
+      for (const settings of Object.values(profile?.courseSettings || {})) {
+        if (!settings) continue;
+        if (settings.isTestCourse && settings.testPollingEnabled === false) settings.pollingEnabled = false;
+        delete settings.isTestCourse;
+        delete settings.testPollingEnabled;
       }
     }
   } catch (_) {}
@@ -249,7 +259,6 @@ function saveStore() {
 function getEffectiveScheduleForPanelUser(panelUsername) {
   const base = {
     masterEnabled: true,
-    forcePolling: false,
     intervalSeconds: 25,
     signThresholdEnabled: false,
     signThresholdRatio: 0.3,
@@ -368,26 +377,6 @@ function mergeSetCookies(setCookieHeaders, jar) {
   }
 }
 
-const CHAOXING_FANYA_EDGE_IPS = ['140.210.69.130', '140.210.69.131'];
-const chaoxingEdgeFallbackHosts = new Map(); // hostname -> { ipIdx, until }
-
-function getActiveEdgeIpForHost(hostname) {
-  const entry = chaoxingEdgeFallbackHosts.get(hostname);
-  if (!entry) return null;
-  if (Date.now() > entry.until) {
-    chaoxingEdgeFallbackHosts.delete(hostname);
-    return null;
-  }
-  return CHAOXING_FANYA_EDGE_IPS[entry.ipIdx % CHAOXING_FANYA_EDGE_IPS.length];
-}
-
-function markHostUseFanyaEdge(hostname, rotate = false) {
-  const prev = chaoxingEdgeFallbackHosts.get(hostname);
-  const ipIdx = prev && rotate ? (prev.ipIdx + 1) % CHAOXING_FANYA_EDGE_IPS.length : (prev ? prev.ipIdx : 0);
-  chaoxingEdgeFallbackHosts.set(hostname, { ipIdx, until: Date.now() + 6 * 3600 * 1000 });
-  return CHAOXING_FANYA_EDGE_IPS[ipIdx];
-}
-
 async function cxRequest(urlStr, {
   method = 'GET',
   params = null,
@@ -407,7 +396,6 @@ async function cxRequest(urlStr, {
 
   const jar = getCookieJar(userId, tempSessionKey);
   let redirectCount = 0;
-  let edgeRetryCount = 0;
   let currentMethod = method.toUpperCase();
   let currentBody = body;
 
@@ -430,32 +418,16 @@ async function cxRequest(urlStr, {
       if (payloadBuffer) reqHeaders['Content-Length'] = payloadBuffer.length;
     }
 
-    const edgeIp = getActiveEdgeIpForHost(targetUrl.hostname);
     const res = await new Promise((resolve, reject) => {
       const isHttps = targetUrl.protocol === 'https:';
       const lib = isHttps ? https : http;
-      const reqOptions = edgeIp
-        ? {
-            protocol: targetUrl.protocol,
-            hostname: edgeIp,
-            port: targetUrl.port || (isHttps ? 443 : 80),
-            path: targetUrl.pathname + targetUrl.search,
-            method: currentMethod,
-            headers: { ...reqHeaders, Host: targetUrl.host },
-            servername: targetUrl.hostname,
-            timeout: 12000,
-          }
-        : {
-            method: currentMethod,
-            headers: reqHeaders,
-            timeout: 12000,
-          };
+      const reqOptions = { method: currentMethod, headers: reqHeaders, timeout: 12000 };
       const cb = (resp) => {
         const chunks = [];
         resp.on('data', (chunk) => chunks.push(chunk));
         resp.on('end', () => resolve({ statusCode: resp.statusCode, headers: resp.headers, buffer: Buffer.concat(chunks) }));
       };
-      const req = edgeIp ? lib.request(reqOptions, cb) : lib.request(targetUrl, reqOptions, cb);
+      const req = lib.request(targetUrl, reqOptions, cb);
       req.on('error', reject);
       req.on('timeout', () => req.destroy(new Error('Request timeout')));
       if (payloadBuffer) req.write(payloadBuffer);
@@ -468,16 +440,10 @@ async function cxRequest(urlStr, {
     const locHeader = String(res.headers.location || '');
     const isWaf403Redirect = res.statusCode >= 300 && res.statusCode < 400 && locHeader.includes('passport403.html');
     const isDirect403 = res.statusCode === 403;
-    if (
-      (isWaf403Redirect || isDirect403) &&
-      targetUrl.hostname.endsWith('chaoxing.com') &&
-      targetUrl.hostname !== 'sso.chaoxing.com' &&
-      edgeRetryCount < 2
-    ) {
-      const switchedIp = markHostUseFanyaEdge(targetUrl.hostname, edgeRetryCount > 0);
-      edgeRetryCount++;
-      sysLog('NET', `检测到超星节点 ${targetUrl.hostname} 触发 WAF 403 (status=${res.statusCode})，自动切换泛雅边缘节点 ${switchedIp} 重试`);
-      continue;
+    if (isWaf403Redirect || isDirect403 || res.statusCode === 429) {
+      const err = new Error(res.statusCode === 429 ? '学习通请求过于频繁 (HTTP 429)' : '学习通拒绝访问 (HTTP 403)');
+      err.statusCode = res.statusCode === 429 ? 429 : 403;
+      throw err;
     }
 
     if (allowRedirects && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {

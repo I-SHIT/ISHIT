@@ -146,6 +146,7 @@ public class KeepAlivePollService extends Service implements Runnable {
         if (ctx == null) return 4000L;
         Context appCtx = ctx.getApplicationContext();
         SharedPreferences prefs = appCtx.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE);
+        if (prefs.getBoolean("offline_mode", false)) return 60000L;
         String token = prefs.getString("panel_token", "");
         String baseUrl = prefs.getString("api_base_url", "http://47.117.27.75");
         if (baseUrl == null || baseUrl.trim().isEmpty()) {
@@ -191,7 +192,7 @@ public class KeepAlivePollService extends Service implements Runnable {
                 return 4000L;
             }
 
-            boolean inClass = data.optBoolean("inClass", false) || data.optBoolean("forcePolling", false);
+            boolean inClass = data.optBoolean("inClass", false);
             int bountyCount = data.optInt("activeBountyCount", 0);
             JSONArray alerts = data.optJSONArray("alerts");
             boolean dispatchedNewAlert = false;

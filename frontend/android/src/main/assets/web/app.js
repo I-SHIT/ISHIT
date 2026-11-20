@@ -258,6 +258,7 @@ function openImagePreviewModal(src) {
 function syncApiEndpointUi() {}
 
 async function api(url, method = 'GET', body = null) {
+  if (localStorage.getItem(MODE_KEY) === 'offline') return { ok: false, msg: '当前处于离线模式' };
   const base = getApiBaseUrl();
   const fullUrl = /^https?:\/\//i.test(url) ? url : (base ? base + url : url);
   const isCrossOrigin = Boolean(base && (!location.origin || base !== location.origin));
@@ -812,6 +813,11 @@ async function savePanelAuthCredentials() {
 
 window.addEventListener('DOMContentLoaded', async () => {
   applyPlatformLayoutClass();
+  if (localStorage.getItem('ishit_mode') === 'offline') {
+    openOfflineWorkspace();
+    return;
+  }
+  if (!new URLSearchParams(location.search).has('help')) showPanelLoginScreen();
   await loadExternalConfigJson();
   initPatternGrid('manualPatternGrid', 'manualSignCode');
   initPatternGrid('helpPatternGrid', 'helpSignCode');
@@ -894,7 +900,7 @@ window.refreshStatus = refreshStatus;
 function renderTopStatus(data) {
   const badge = document.getElementById('classStatusBadge');
   if (!badge) return;
-  const active = Boolean(data.inClass || data.schedule?.forcePolling);
+  const active = Boolean(data.inClass);
   badge.className = `status-dot ${active ? 'active' : ''}`;
   const uid = state.selectedUid || data.currentUid;
   const accSt = uid && data.perAccountStatus ? data.perAccountStatus[uid] : null;
@@ -927,7 +933,6 @@ function renderOverview(data, syncInputs) {
     const ovMasterEl = document.getElementById('overviewMasterToggle');
     if (masterEl && syncInputs) masterEl.checked = Boolean(data.schedule.masterEnabled);
     if (ovMasterEl) ovMasterEl.checked = Boolean(data.schedule.masterEnabled);
-    renderPollingModeButtons(Boolean(data.schedule.forcePolling));
     const pToggle = document.getElementById('protectThresholdToggle');
     const pInput = document.getElementById('protectThresholdInput');
     if (pToggle && syncInputs) pToggle.checked = Boolean(data.schedule.signThresholdEnabled);
@@ -936,12 +941,11 @@ function renderOverview(data, syncInputs) {
     }
     const modeSummaryEl = document.getElementById('overviewModeSummaryText');
     if (modeSummaryEl) {
-      const mText = data.schedule.forcePolling ? '持续轮询模式' : '课表轮询模式';
       const pText = data.schedule.signThresholdEnabled
         ? ` · 人数保护 >=${Math.round(Number(data.schedule.signThresholdRatio || 0.3) * 100)}% (含临期抢签)`
         : ' · 发现即签';
       const effSecDisp = data.effectiveIntervalSeconds || data.schedule.intervalSeconds || 15;
-      modeSummaryEl.textContent = `当前策略：${mText}（间隔 ${effSecDisp}s${pText}）`;
+      modeSummaryEl.textContent = `课表轮询（间隔 ${effSecDisp}s${pText}）`;
     }
     const adminEffTag = document.getElementById('adminBountyEffectivePollTag');
     if (adminEffTag && data.effectiveIntervalSeconds) {
@@ -949,7 +953,6 @@ function renderOverview(data, syncInputs) {
       adminEffTag.textContent = `当前生效 ${data.effectiveIntervalSeconds}s · 同步 ${bSync}s`;
     }
   }
-  renderOverviewTestCourses(isCurrentPanelAdmin() ? (data.courses || []) : (data.myOwnedCourses || []));
 
   // 待验证滑块
   const capSec = document.getElementById('pendingCaptchaSection');
@@ -1094,33 +1097,6 @@ function renderOverview(data, syncInputs) {
   setHtmlIfChanged(logsEl, logsHtml);
 }
 
-function renderPollingModeButtons(isContinuous) {
-  const btnCur = document.getElementById('modeBtnCurriculum');
-  const btnCon = document.getElementById('modeBtnContinuous');
-  const sBtnCur = document.getElementById('schedModeBtnCurriculum');
-  const sBtnCon = document.getElementById('schedModeBtnContinuous');
-  if (btnCur) btnCur.classList.toggle('active', !isContinuous);
-  if (btnCon) btnCon.classList.toggle('active', isContinuous);
-  if (sBtnCur) sBtnCur.classList.toggle('active', !isContinuous);
-  if (sBtnCon) sBtnCon.classList.toggle('active', isContinuous);
-  const desc = document.getElementById('pollingModeDesc');
-  if (desc) {
-    desc.textContent = isContinuous
-      ? '持续轮询：任何时间段对所有课程进行轮询（单门课程轮询开关已锁定）'
-      : '课表轮询：根据课表时段开启轮询，未勾选轮询的课程即使在课表中也不轮询';
-  }
-}
-
-async function setPollingMode(mode) {
-  const forcePolling = mode === 'continuous';
-  await api('/api/schedule', 'POST', { uid: state.selectedUid, masterEnabled: true, forcePolling });
-  if (!forcePolling && state.selectedUid) {
-    await api('/api/user/profile', 'POST', { uid: state.selectedUid, useCurriculumSchedule: true });
-  }
-  showToast(forcePolling ? '已切换为持续轮询模式' : '已切换为课表轮询模式');
-  await refreshStatus(true);
-}
-
 async function quickSaveScheduleToggle(explicitChecked) {
   const masterEnabled =
     typeof explicitChecked === 'boolean'
@@ -1141,7 +1117,7 @@ async function saveGlobalIntervalConfig() {
   if (inp) inp.value = intervalSeconds;
   const res = await api('/api/schedule', 'POST', { uid: state.selectedUid, intervalSeconds });
   if (res.ok) {
-    showToast(`全局轮询间隔已设为 ${intervalSeconds} 秒`);
+    showToast(`课表轮询间隔已设为 ${intervalSeconds} 秒`);
     refreshStatus(false);
   }
 }
@@ -1167,9 +1143,9 @@ async function saveProtectThresholdConfig() {
     refreshStatus(false);
   }
 }
-async function triggerQuickSign(forceAll) {
+async function triggerQuickSign() {
   showToast(isCurrentPanelAdmin() ? '正在扫描全部账号签到活动...' : '正在扫描您的账号签到活动...');
-  const res = await api('/api/sign/quick', 'POST', { forceAll });
+  const res = await api('/api/sign/quick', 'POST', {});
   if (res.ok) {
     showToast(`扫描完成，发现 ${res.detected?.length || 0} 个进行中签到`);
     refreshStatus(false);
@@ -1195,46 +1171,6 @@ async function loadCourses(force = false) {
   }
 }
 
-function renderOverviewTestCourses(courses) {
-  const box = document.getElementById('overviewTestCoursesBox');
-  if (!box) return;
-  const seenCourseIds = new Set();
-  const testCourses = (courses || []).filter((c) => {
-    if (!c.settings?.isTestCourse) return false;
-    const cid = String(c.courseId);
-    if (seenCourseIds.has(cid)) return false;
-    seenCourseIds.add(cid);
-    return true;
-  });
-  if (testCourses.length === 0) {
-    setHtmlIfChanged(box, `<div class="list-row" style="padding:8px 0;">
-      <span style="font-size:11px; color:var(--muted);">测试课程：暂未设置（在「课程」列表中将课程设为测试课程后，不受轮询模式与课表限制，可随时独立开关轮询）</span>
-    </div>`);
-    return;
-  }
-  const testHtml = testCourses
-    .map((c) => {
-      const cName = c.name || c.courseName || '未知课程';
-      const testEnabled = c.settings?.testPollingEnabled !== false;
-      return `<div class="list-row" style="padding:8px 0;">
-        <div class="row" style="gap:6px;">
-          <span class="tag solid">测试课程</span>
-          <span style="font-weight:500;">${escapeHtml(cName)}</span>
-          <span style="font-size:11px; color:var(--muted);">持续轮询</span>
-        </div>
-        <div class="row" style="gap:8px;">
-          <span style="font-size:11px; color:var(--muted);">${testEnabled ? '测试轮询中' : '已关闭'}</span>
-          <label class="switch" title="独立开启或关闭该测试课程的全天候轮询">
-            <input type="checkbox" ${testEnabled ? 'checked' : ''} onchange="toggleTestCoursePolling('${escapeHtml(c.courseId)}', this.checked)" />
-            <span class="slider"></span>
-          </label>
-        </div>
-      </div>`;
-    })
-    .join('');
-  setHtmlIfChanged(box, testHtml);
-}
-
 function renderCoursesList(courses) {
   const box = document.getElementById('coursesListContainer');
   if (!box) return;
@@ -1243,7 +1179,7 @@ function renderCoursesList(courses) {
     return;
   }
   const canEdit = canEditSelectedAccount();
-  const isContinuous = Boolean(state.status?.schedule?.forcePolling);
+
   const btnSync = document.getElementById('btnSyncCourses');
   if (btnSync) {
     btnSync.disabled = !canEdit;
@@ -1253,70 +1189,45 @@ function renderCoursesList(courses) {
   const btnBatchOn = document.getElementById('btnBatchEnablePolling');
   const btnBatchOff = document.getElementById('btnBatchDisablePolling');
   if (btnBatchOn) {
-    btnBatchOn.disabled = isContinuous || !canEdit;
-    btnBatchOn.style.opacity = isContinuous || !canEdit ? '0.45' : '1';
+    btnBatchOn.disabled = !canEdit;
+    btnBatchOn.style.opacity = !canEdit ? '0.45' : '1';
     btnBatchOn.title = !canEdit
       ? '只读模式：不可修改他人课程'
-      : isContinuous
-      ? '持续轮询模式下常规课程已锁定开启'
       : '一键开启所有常规课程的课表轮询';
   }
   if (btnBatchOff) {
-    btnBatchOff.disabled = isContinuous || !canEdit;
-    btnBatchOff.style.opacity = isContinuous || !canEdit ? '0.45' : '1';
+    btnBatchOff.disabled = !canEdit;
+    btnBatchOff.style.opacity = !canEdit ? '0.45' : '1';
     btnBatchOff.title = !canEdit
       ? '只读模式：不可修改他人课程'
-      : isContinuous
-      ? '持续轮询模式下常规课程不可关闭'
-      : '一键关闭所有常规课程的课表轮询（测试课程不受影响）';
+      : '一键关闭所有常规课程的课表轮询';
   }
-  const modeBanner = isContinuous
-    ? `<div class="list-row" style="background:var(--surface-sub); margin-bottom:10px;">
-        <span style="font-size:12px; color:var(--muted);">当前处于「持续轮询」模式，常规课程均强制参与全天候轮询，无法单独修改常规课程轮询开关（被设为「测试课程」的课程仍可随时独立开启或关闭）。</span>
-        ${canEdit ? `<button class="btn btn-ghost btn-sm" onclick="setPollingMode('curriculum')">切回课表轮询</button>` : ''}
-      </div>`
-    : '';
-
-  const sorted = [...courses].sort((a, b) => Number(Boolean(b.settings?.isTestCourse)) - Number(Boolean(a.settings?.isTestCourse)));
-
-  const coursesHtml =
-    modeBanner +
-    sorted
+  const coursesHtml = courses
       .map((c) => {
         const cName = c.name || c.courseName || '未知课程';
         const cTeacher = c.teacher || c.teacherfactor || '';
-        const isTest = Boolean(c.settings?.isTestCourse);
-        const testEnabled = c.settings?.testPollingEnabled !== false;
-        const regEnabled = isContinuous ? true : c.settings?.pollingEnabled !== false;
+        const regEnabled = c.settings?.pollingEnabled !== false;
         const randOn = c.settings?.randomOffsetEnabled !== false;
         const randM = Number.isFinite(Number(c.settings?.randomOffsetMeters)) ? Number(c.settings.randomOffsetMeters) : 15;
         const randSuffix = randOn && randM > 0 ? ` (±${randM}m随机)` : '';
         const locText = (c.settings?.location?.address ? `预设位置: ${c.settings.location.address}` : '使用默认位置') + randSuffix;
 
-        const switchControl = isTest
-          ? `<span style="font-size:12px; font-weight:500;">测试轮询</span>
-             <label class="switch ${!canEdit ? 'disabled' : ''}" title="${!canEdit ? '只读模式：无法修改他人课程' : '测试课程不受轮询模式与课表限制，可随时独立开启或关闭'}">
-               <input type="checkbox" ${testEnabled ? 'checked' : ''} ${!canEdit ? 'disabled' : ''} onchange="toggleTestCoursePolling('${escapeHtml(c.courseId)}', this.checked)" />
-               <span class="slider"></span>
-             </label>`
-          : `<span style="font-size:12px; color:var(--muted);">${isContinuous ? '持续轮询中(锁定)' : '是否轮询'}</span>
-             <label class="switch ${isContinuous || !canEdit ? 'disabled' : ''}" title="${!canEdit ? '只读模式：无法修改他人课程' : isContinuous ? '持续轮询模式下常规课程不可修改' : '开启或关闭该课程轮询'}">
-               <input type="checkbox" ${regEnabled ? 'checked' : ''} ${isContinuous || !canEdit ? 'disabled' : ''} onchange="toggleCoursePolling('${escapeHtml(c.courseId)}', this.checked)" />
+        const switchControl = `<span style="font-size:12px; color:var(--muted);">课表轮询</span>
+             <label class="switch ${!canEdit ? 'disabled' : ''}" title="${!canEdit ? '只读模式：无法修改他人课程' : '开启或关闭该课程轮询'}">
+               <input type="checkbox" ${regEnabled ? 'checked' : ''} ${!canEdit ? 'disabled' : ''} onchange="toggleCoursePolling('${escapeHtml(c.courseId)}', this.checked)" />
                <span class="slider"></span>
              </label>`;
 
         const editBtnsHtml = canEdit
           ? `<button class="btn btn-ghost btn-sm" onclick='copyCourseObjectToClipboard(${JSON.stringify({ courseId: c.courseId, classId: c.classId, name: cName, teacherName: cTeacher, className: c.note || "" }).replace(/'/g, "&#39;")})'>复制课程</button>
-             <button class="btn ${isTest ? '' : 'btn-ghost'} btn-sm" onclick="toggleTestCourse('${escapeHtml(c.courseId)}', ${!isTest})">${isTest ? '取消测试课' : '设为测试课'}</button>
              <button class="btn btn-ghost btn-sm" onclick='openCourseSettingModal(${JSON.stringify(c).replace(/'/g, "&#39;")})'>预设</button>`
           : `<button class="btn btn-ghost btn-sm" onclick='copyCourseObjectToClipboard(${JSON.stringify({ courseId: c.courseId, classId: c.classId, name: cName, teacherName: cTeacher, className: c.note || "" }).replace(/'/g, "&#39;")})'>复制课程</button>
              <span class="tag">只读</span>`;
 
-        return `<div class="list-row" style="${isTest ? 'background:var(--surface-sub); padding-left:10px; padding-right:10px; border-radius:6px;' : ''}">
+        return `<div class="list-row">
         <div>
           <div class="row" style="gap:6px;">
             <span style="font-weight:500;">${escapeHtml(cName)}</span>
-            ${isTest ? '<span class="tag solid">测试课程</span>' : ''}
           </div>
           <div style="font-size:11px; color:var(--muted);">${escapeHtml(cTeacher)}${c.note ? ` · 班级: ${escapeHtml(c.note)}` : ''} · ${escapeHtml(locText)}</div>
         </div>
@@ -1332,10 +1243,6 @@ function renderCoursesList(courses) {
 }
 
 async function batchToggleCoursePolling(pollingEnabled) {
-  if (state.status?.schedule?.forcePolling) {
-    showToast('持续轮询模式下无法修改常规课程轮询开关');
-    return;
-  }
   const res = await api('/api/courses/settings/batch', 'POST', {
     uid: state.selectedUid,
     pollingEnabled: Boolean(pollingEnabled),
@@ -1349,41 +1256,8 @@ async function batchToggleCoursePolling(pollingEnabled) {
 }
 
 async function toggleCoursePolling(courseId, pollingEnabled) {
-  if (state.status?.schedule?.forcePolling) {
-    showToast('持续轮询模式下无法修改常规课程轮询开关');
-    refreshStatus(false);
-    return;
-  }
   await api('/api/courses/settings', 'POST', { uid: state.selectedUid, courseId, pollingEnabled });
   showToast(pollingEnabled ? '已开启该课轮询' : '已关闭该课轮询');
-  refreshStatus(false);
-}
-
-async function toggleTestCourse(courseId, isTestCourse) {
-  await api('/api/courses/settings', 'POST', {
-    uid: state.selectedUid,
-    courseId,
-    isTestCourse: Boolean(isTestCourse),
-    testPollingEnabled: true,
-  });
-  showToast(isTestCourse ? '已设为测试课程（不受模式与课表限制，随时轮询）' : '已恢复为常规课程');
-  refreshStatus(false);
-}
-
-async function toggleTestCoursePolling(courseId, testPollingEnabled) {
-  const targetUid = isCurrentPanelAdmin()
-    ? state.selectedUid
-    : (state.status?.myOwnedUid || state.selectedUid);
-  const res = await api('/api/courses/settings', 'POST', {
-    uid: targetUid,
-    courseId,
-    testPollingEnabled: Boolean(testPollingEnabled),
-  });
-  if (res.ok) {
-    showToast(testPollingEnabled ? '测试课程轮询已开启' : '测试课程轮询已关闭');
-  } else {
-    showToast(res.msg || '操作失败');
-  }
   refreshStatus(false);
 }
 
@@ -1485,6 +1359,10 @@ async function inspectCourseActives(course) {
   const res = await api(
     `/api/courses/actives?courseId=${encodeURIComponent(course.courseId)}&classId=${encodeURIComponent(course.classId)}&cpi=${encodeURIComponent(course.cpi || '')}&uid=${encodeURIComponent(state.selectedUid || '')}`
   );
+  if (!res.ok) {
+    listEl.textContent = res.msg || '活动查询失败';
+    return;
+  }
   const actives = res.actives || [];
   if (actives.length === 0) {
     listEl.innerHTML = `<div class="empty">无近期签到活动</div>`;
@@ -1493,6 +1371,7 @@ async function inspectCourseActives(course) {
   listEl.innerHTML = actives
     .map((a) => {
       const aName = a.name || a.nameOne || '课堂活动';
+      if (!a.isSignActivity || !a.id) return `<div class="list-row">${escapeHtml(aName)} · 课堂活动</div>`;
       const sLabel = SIGN_TYPE_LABELS[a.signType] || a.signType || '活动';
       const signedNum = a.signedCount ?? a.attendNum ?? 0;
       const totalNum = a.totalCount || 0;
@@ -1991,12 +1870,11 @@ function renderCurriculumView(cur, diyLessons = []) {
     group.items.sort((a, b) => Number(b.inThisWeek) - Number(a.inThisWeek));
     const cardsInner = group.items
       .map((item) => {
-        const isContinuous = Boolean(state.status?.schedule?.forcePolling);
+
         const matchedCourse = (state.courses || []).find((c) => String(c.courseId) === String(item.courseId) || (c.name || c.courseName) === item.name);
         const st = effSettings[item.courseId] || (matchedCourse ? effSettings[matchedCourse.courseId] : null);
-        const isTest = Boolean(st && st.isTestCourse);
         const diyPaused = Boolean(item.isDiy && (item.enabled === false || item.pollingEnabled === false));
-        const paused = diyPaused || (isTest ? st.testPollingEnabled === false : (!isContinuous && st && st.pollingEnabled === false));
+        const paused = diyPaused || st?.pollingEnabled === false;
         const weekRangeStr = formatWeeksCompact(item.weeks);
         const locStr = item.location ? `@${item.location}` : '';
         const teacherStr = item.teacherName || item.teacher || '';
@@ -2029,7 +1907,7 @@ function renderCurriculumView(cur, diyLessons = []) {
             </div>
             <div class="wk-badge-row">
               <span>${escapeHtml(weekRangeStr)}</span>
-              <span>${item.isDiy ? (paused ? 'DIY(关)' : 'DIY(开)') : isTest ? (paused ? '测试课(关)' : '测试课(开)') : (paused ? '已暂停' : (item.inThisWeek ? '本周' : '非本周'))}</span>
+              <span>${item.isDiy ? (paused ? 'DIY(关)' : 'DIY(开)') : (paused ? '已暂停' : (item.inThisWeek ? '本周' : '非本周'))}</span>
             </div>
           </div>`;
       })
@@ -4047,6 +3925,7 @@ function handleAlertDirectJump(alertObj) {
 }
 
 window.onNativeNotificationClick = function (rawPayload) {
+  if (localStorage.getItem(MODE_KEY) === 'offline') return;
   refreshStatus(false);
   try {
     const parsed = typeof rawPayload === 'string' ? JSON.parse(rawPayload) : rawPayload;

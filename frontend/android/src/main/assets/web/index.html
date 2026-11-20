@@ -7,7 +7,7 @@
   <link rel="icon" type="image/png" href="favicon.png?v=8" />
   <link rel="shortcut icon" type="image/png" href="favicon.png?v=8" />
   <link rel="stylesheet" href="vendor/leaflet/leaflet.css?v=194" />
-  <link rel="stylesheet" href="style.css?v=13" />
+  <link rel="stylesheet" href="style.css?v=14" />
   <script src="vendor/leaflet/leaflet.js?v=194"></script>
   <script src="jsqr.js?v=9"></script>
 </head>
@@ -121,6 +121,46 @@
   </div>
 </div>
 
+<main id="offline-workspace" hidden>
+  <header class="topbar"><h1>离线课表</h1><button class="btn btn-ghost" onclick="leaveOfflineMode()">切回在线模式</button></header>
+  <p id="offline-now" role="status"></p>
+  <div class="grid-2">
+    <section class="panel">
+      <h2>课程与排课</h2>
+      <div id="offline-list"></div>
+      <form id="offline-new-course">
+        <label>课程名称<input id="offline-title" required></label>
+        <label>班级或教室<input id="offline-room"></label>
+        <button class="btn">添加课程</button>
+      </form>
+      <form id="offline-new-lesson">
+        <label>排课课程<select id="offline-course" required></select></label>
+        <label>星期<select id="offline-day"><option value="1">周一</option><option value="2">周二</option><option value="3">周三</option><option value="4">周四</option><option value="5">周五</option><option value="6">周六</option><option value="7">周日</option></select></label>
+        <div class="row"><label>开始<input type="time" id="offline-start" value="08:00" required></label>
+          <label>结束<input type="time" id="offline-end" value="09:40" required></label></div>
+        <label>教学周<input id="offline-weeks" placeholder="留空为每周，指定周次用逗号分隔"></label>
+        <button class="btn" id="offline-add-lesson">添加时段</button>
+      </form>
+    </section>
+    <section class="panel">
+      <h2>本机设置</h2>
+      <form id="offline-settings">
+        <label>本地账号名称<input id="offline-name" required></label>
+        <label>学期第一周的周一<input id="offline-semester" type="date" required></label>
+        <label>课前课后缓冲（分钟）<input id="offline-buffer" type="number" min="0" max="180" required></label>
+        <label>前台课表检查间隔（秒）<input id="offline-interval" type="number" min="3" max="300" required></label>
+        <label><input id="offline-enabled" type="checkbox"> 启用前台课表检查</label>
+        <button class="btn">保存设置</button>
+      </form>
+      <h2>配置迁移</h2>
+      <p>备份包含本地账号、全部课程、排课和前台检查设置。</p>
+      <div class="row"><button class="btn btn-ghost" onclick="exportOffline()">导出全部配置</button>
+        <button class="btn btn-ghost" onclick="document.getElementById('offline-file').click()">导入配置文件</button></div>
+      <input id="offline-file" type="file" accept=".json,application/json" hidden>
+    </section>
+  </div>
+</main>
+
 <!-- 面板访问登录页（未认证或更换设备/浏览器访问时展示，无注册入口） -->
 <div id="panelLoginApp" class="layout" style="display:none; max-width:380px; padding-top:12vh;">
   <div class="win-login-titlebar win-only-flex" onmousedown="onWinTitlebarMouseDown(event)" ondblclick="onWinTitlebarDblClick(event)">
@@ -150,6 +190,7 @@
     <label style="margin-top:10px;">访问密码</label>
     <input id="panelAuthPassword" type="password" placeholder="请输入访问密码" autocomplete="current-password" onkeydown="if(event.key==='Enter')submitPanelLogin()" />
     <button class="btn" style="width:100%; margin-top:18px;" onclick="submitPanelLogin()">登录</button>
+    <button type="button" class="btn btn-ghost" onclick="enterOfflineMode()">进入离线模式</button>
     <div id="panelAuthError" style="margin-top:10px; font-size:12px; color:var(--muted); text-align:center;">仅限后台授权账号访问</div>
   </div>
 </div>
@@ -275,8 +316,8 @@
 
         <div class="list-row">
           <div>
-            <div style="font-weight:500;">全局轮询</div>
-            <div style="font-size:11px; color:var(--muted);" id="overviewModeSummaryText">按课表或测试课程自动触发后台签到</div>
+            <div style="font-weight:500;">课表轮询</div>
+            <div style="font-size:11px; color:var(--muted);" id="overviewModeSummaryText">仅在已启用课程的排课时段轮询</div>
           </div>
           <div class="row" style="gap:8px;">
             <button type="button" class="btn btn-ghost btn-sm" onclick="switchTab('polling')">轮询策略设置</button>
@@ -287,11 +328,9 @@
           </div>
         </div>
 
-        <div id="overviewTestCoursesBox"></div>
 
         <div class="row" style="margin-top:12px;">
-          <button class="btn" style="flex:1;" onclick="triggerQuickSign(false)">扫描开启课程</button>
-          <button class="btn btn-ghost" style="flex:1;" onclick="triggerQuickSign(true)">扫描全部课程</button>
+          <button class="btn" style="flex:1;" onclick="triggerQuickSign()">扫描当前课表课程</button>
         </div>
       </div>
 
@@ -575,7 +614,7 @@
         <div class="panel">
           <div class="panel-head">
             <span class="panel-title">模式与频率</span>
-            <button class="btn btn-sm" onclick="triggerQuickSign(false)">快速签到</button>
+            <button class="btn btn-sm" onclick="triggerQuickSign()">快速签到</button>
           </div>
           <div class="list-row">
             <div>
@@ -589,13 +628,6 @@
           </div>
 
           <div class="list-row" style="flex-direction:column; align-items:stretch; gap:8px;">
-            <div style="display:flex; justify-content:space-between; align-items:center;">
-              <span style="font-weight:500;">轮询模式</span>
-              <div class="tabs" style="padding:2px;">
-                <button type="button" class="tab-btn" id="modeBtnCurriculum" onclick="setPollingMode('curriculum')">课表轮询</button>
-                <button type="button" class="tab-btn" id="modeBtnContinuous" onclick="setPollingMode('continuous')">持续轮询</button>
-              </div>
-            </div>
             <div id="pollingModeDesc" style="font-size:11px; color:var(--muted);">课表轮询：根据课表时段开启轮询，可在课程列表单独关闭指定课程</div>
           </div>
 
@@ -743,6 +775,7 @@
 
     <!-- 3.4 后台用户管理设置（个人账号密码修改 + Admin 专属网站用户管理） -->
     <div id="settings-pane-security" class="sub-pane" style="display:none;">
+      <button type="button" class="btn btn-ghost" onclick="enterOfflineMode()">进入离线模式</button>
       <div class="grid-2">
         <div class="panel">
           <div class="panel-head">
@@ -1422,7 +1455,7 @@
         </div>
         <div>
           <label>触发来源</label>
-          <input id="adminRecTriggerSource" placeholder="如：测试课程轮询 / 悬赏协助" />
+          <input id="adminRecTriggerSource" placeholder="如：课表轮询 / 悬赏协助" />
         </div>
       </div>
       <label style="margin-top:8px;">账号签到结果明细（每行格式：姓名|状态(ok/fail)|提示语）</label>
@@ -1436,7 +1469,8 @@
   </div>
 </div>
 
-<script src="app.js?v=26"></script>
+<script src="offline.js?v=1"></script>
+<script src="app.js?v=27"></script>
 </body>
 </html>
 

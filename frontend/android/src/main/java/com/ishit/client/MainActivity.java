@@ -461,8 +461,54 @@ public class MainActivity extends Activity {
         return "application/octet-stream";
     }
 
+    private static final int EXPORT_CONFIG_REQUEST = 1204;
+
+    private void showExportResult(final String message) {
+        runOnUiThread(new Runnable() {
+            @Override public void run() {
+                android.widget.Toast.makeText(MainActivity.this, message, android.widget.Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+
+    public void exportOfflineConfig(String json) {
+        if (webView == null || !LOCAL_ASSET_INDEX.equals(Uri.parse(webView.getUrl()).buildUpon().clearQuery().fragment(null).toString())) return;
+        try {
+            File pending = new File(getCacheDir(), "pending-offline-export.json");
+            try (FileOutputStream output = new FileOutputStream(pending)) {
+                output.write(json.getBytes(StandardCharsets.UTF_8));
+            }
+            Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType("application/json");
+            intent.putExtra(Intent.EXTRA_TITLE, "ISHIT-offline.json");
+            startActivityForResult(intent, EXPORT_CONFIG_REQUEST);
+        } catch (Exception e) { showExportResult("无法打开配置保存窗口"); }
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == EXPORT_CONFIG_REQUEST) {
+            if (resultCode == Activity.RESULT_OK && data != null && data.getData() != null) {
+                final Uri uri = data.getData();
+                final File pending = new File(getCacheDir(), "pending-offline-export.json");
+                new Thread(new Runnable() {
+                    @Override public void run() {
+                        try (FileInputStream input = new FileInputStream(pending);
+                             java.io.OutputStream output = getContentResolver().openOutputStream(uri, "wt")) {
+                            byte[] chunk = new byte[8192];
+                            int count;
+                            while ((count = input.read(chunk)) != -1) output.write(chunk, 0, count);
+                            showExportResult("配置已导出");
+                        } catch (Exception e) { showExportResult("配置导出失败"); }
+                        finally { pending.delete(); }
+                    }
+                }).start();
+            } else {
+                new File(getCacheDir(), "pending-offline-export.json").delete();
+            }
+            return;
+        }
         if (requestCode == FILE_CHOOSER_REQ_CODE) {
             if (filePathCallback == null) return;
             Uri[] results = null;

@@ -12,6 +12,19 @@ public class NativeBridge {
     }
 
     @JavascriptInterface
+    public void setOfflineMode(boolean enabled) {
+        act.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putBoolean("offline_mode", enabled).commit();
+    }
+
+    @JavascriptInterface
+    public void exportOfflineConfig(final String json) {
+        act.runOnUiThread(new Runnable() {
+            @Override public void run() { act.exportOfflineConfig(json); }
+        });
+    }
+
+    @JavascriptInterface
     public String getConfigJson() {
         return act.loadOrCreateExternalConfigJson();
     }

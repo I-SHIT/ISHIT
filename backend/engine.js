@@ -576,18 +576,12 @@ function isAccountAutoSignEnabledForCourse(uid, courseId, classId) {
   const resolvedCourseId = matchedCourse ? String(matchedCourse.courseId) : (courseId ? String(courseId) : "");
   const st = resolvedCourseId ? eff.courseSettings?.[resolvedCourseId] : null;
 
-  // 测试课程拥有独立最高优先级，由 testPollingEnabled 独立控制
-  if (st?.isTestCourse) {
-    return st.testPollingEnabled !== false;
-  }
-
   // 常规课程：必须开启账号轮询总开关 masterEnabled
   if (!accCfg.masterEnabled) {
     return false;
   }
 
-  // 若非持续轮询模式，则尊重单门课程的 pollingEnabled 开关
-  if (!accCfg.forcePolling && st && st.pollingEnabled === false) {
+  if (st && st.pollingEnabled === false) {
     return false;
   }
 
@@ -2074,81 +2068,25 @@ function parseHmToMins(hm) {
   return (h || 0) * 60 + (m || 0);
 }
 
-// 获取用户所有已设为【测试课程】的列表及其独立轮询状态
-function getTestCoursesInfo(effProfile) {
-  const courses = effProfile?.coursesCache || [];
-  const settingsMap = effProfile?.courseSettings || {};
-  const seenIds = new Set();
-  const allTestCourses = [];
-  const activeTestCourses = [];
-  for (const c of courses) {
-    const cid = String(c.courseId);
-    if (seenIds.has(cid)) continue;
-    const st = settingsMap[c.courseId];
-    if (st && st.isTestCourse) {
-      seenIds.add(cid);
-      allTestCourses.push(c);
-      if (st.testPollingEnabled !== false) {
-        activeTestCourses.push(c);
-      }
-    }
-  }
-  return { allTestCourses, activeTestCourses };
+function lessonMatchesCourse(lesson, course) {
+  if (lesson.classId && String(lesson.classId) !== String(course.classId)) return false;
+  if (lesson.courseId) return String(lesson.courseId) === String(course.courseId);
+  return Boolean(lesson.name && lesson.name === (course.name || course.courseName));
 }
 
-// 检查某门课是否在用户配置中开启了轮询（测试课程拥有最高独立优先级）
-function isLessonCoursePollingEnabled(effProfile, lesson) {
-  const settingsMap = effProfile?.courseSettings || {};
-  const courses = effProfile?.coursesCache || [];
-  const matchedCourse = courses.find(
-    (c) =>
-      (lesson.courseId && String(c.courseId) === String(lesson.courseId)) ||
-      (lesson.name && (c.name || c.courseName) === lesson.name)
-  );
-  const st = (lesson.courseId && settingsMap[lesson.courseId]) || (matchedCourse && settingsMap[matchedCourse.courseId]);
-  if (st) {
-    if (st.isTestCourse) return st.testPollingEnabled !== false;
-    return st.pollingEnabled !== false;
-  }
-  return true;
+function isLessonCoursePollingEnabled(profile, lesson) {
+  if (lesson.courseId) return profile.courseSettings?.[lesson.courseId]?.pollingEnabled !== false;
+  const matches = (profile.coursesCache || []).filter(course => lessonMatchesCourse(lesson, course));
+  return !matches.length || matches.some(course => profile.courseSettings?.[course.courseId]?.pollingEnabled !== false);
 }
 
 // 检查单个账号当前是否处于轮询激活状态
 function getAccountActiveScheduleStatus(uid, now = new Date()) {
   const cfg = getEffectiveScheduleForCxUid(uid);
   const eff = getEffectiveUserProfile(uid);
-  const { activeTestCourses } = getTestCoursesInfo(eff);
-  const testNames = activeTestCourses.map((c) => c.name || c.courseName);
-
-  // 测试课程不受轮询模式、总开关、课表时间影响，只要开启了测试轮询即随时监测
   if (!cfg.masterEnabled) {
-    if (activeTestCourses.length > 0) {
-      return {
-        inClass: true,
-        hasActiveTestCourses: true,
-        activeTestCourses,
-        mode: 'test_only',
-        reason: `测试轮询: ${testNames.join(', ')}`,
-        matchedLessons: [],
-        matchedSlot: { label: `测试课程 (${testNames[0]})` },
-      };
-    }
-    return { inClass: false, hasActiveTestCourses: false, activeTestCourses: [], mode: cfg.forcePolling ? 'continuous' : 'curriculum', reason: '轮询已关闭', matchedLessons: [], matchedSlot: null };
+    return { inClass: false, mode: 'curriculum', reason: '轮询已关闭', matchedLessons: [], matchedSlot: null };
   }
-
-  if (cfg.forcePolling) {
-    const suffix = activeTestCourses.length > 0 ? ` · 含测试课 ${testNames.join(', ')}` : '';
-    return {
-      inClass: true,
-      hasActiveTestCourses: activeTestCourses.length > 0,
-      activeTestCourses,
-      mode: 'continuous',
-      reason: `持续轮询（全课程全时段${suffix}）`,
-      matchedLessons: [],
-      matchedSlot: { label: '持续轮询' },
-    };
-  }
-
   const day = now.getDay() === 0 ? 7 : now.getDay(); // 1..7
   const curMins = now.getHours() * 60 + now.getMinutes();
   const buffer = Number(eff.curriculumBufferMinutes ?? 10);
@@ -2178,35 +2116,18 @@ function getAccountActiveScheduleStatus(uid, now = new Date()) {
         return isLessonCoursePollingEnabled(eff, les);
       });
       if (enabledLessons.length > 0) {
-        const suffix = activeTestCourses.length > 0 ? ` + 测试课: ${testNames.join(', ')}` : '';
         return {
           inClass: true,
           regularInClass: true,
-          hasActiveTestCourses: activeTestCourses.length > 0,
-          activeTestCourses,
           mode: 'curriculum',
-          reason: `课表轮询中: ${enabledLessons.map((l) => l.name).join(', ')}${suffix}`,
+          reason: `课表轮询中: ${enabledLessons.map((l) => l.name).join(', ')}`,
           matchedLessons: enabledLessons,
           matchedSlot: { label: `${enabledLessons[0].name} (${enabledLessons[0].startTime}-${enabledLessons[0].endTime})` },
-        };
-      }
-      if (activeTestCourses.length > 0) {
-        return {
-          inClass: true,
-          regularInClass: false,
-          hasActiveTestCourses: true,
-          activeTestCourses,
-          mode: 'test_only',
-          reason: `测试课程轮询中: ${testNames.join(', ')} (排课已暂停)`,
-          matchedLessons: [],
-          matchedSlot: { label: `测试课程 (${testNames[0]})` },
         };
       }
       return {
         inClass: false,
         regularInClass: false,
-        hasActiveTestCourses: false,
-        activeTestCourses: [],
         mode: 'curriculum',
         reason: `当前排课已暂停轮询: ${timeMatchedLessons.map((l) => l.name).join(', ')}`,
         matchedLessons: [],
@@ -2215,29 +2136,15 @@ function getAccountActiveScheduleStatus(uid, now = new Date()) {
     }
   }
 
-  // 2. 非上课时间，但存在已开启轮询的【测试课程】 -> 照常随时轮询该测试课程
-  if (activeTestCourses.length > 0) {
-    return {
-      inClass: true,
-      regularInClass: false,
-      hasActiveTestCourses: true,
-      activeTestCourses,
-      mode: 'test_only',
-      reason: `测试轮询: ${testNames.join(', ')}`,
-      matchedLessons: [],
-      matchedSlot: { label: `测试课程 (${testNames[0]})` },
-    };
-  }
-
-  return { inClass: false, regularInClass: false, hasActiveTestCourses: false, activeTestCourses: [], mode: 'curriculum', reason: '课表轮询 · 非上课时间', matchedLessons: [], matchedSlot: null };
+  return { inClass: false, regularInClass: false, mode: 'curriculum', reason: '课表轮询 · 非上课时间', matchedLessons: [], matchedSlot: null };
 }
 
 function getGlobalScheduleSummary() {
   const uid = store.currentUid || store.accounts?.[0]?.uid;
   if (!uid) {
     return {
-      inClass: Boolean(store.schedule?.masterEnabled && store.schedule?.forcePolling),
-      matchedSlot: store.schedule?.forcePolling ? { label: '持续轮询' } : null,
+      inClass: false,
+      matchedSlot: null,
       perAccountStatus: {},
     };
   }
@@ -2260,52 +2167,20 @@ function getGlobalScheduleSummary() {
 }
 
 // 聚合已登录账号需要轮询的班级课程（支持 onlyUids 限定扫描指定账号）
-async function collectEnabledClassEntries(forceAll = false, onlyUids = null) {
+async function collectEnabledClassEntries(onlyUids = null) {
   const classMap = new Map(); // key: classId_courseId -> { course, memberUids: [], memberNames: [], scanUid }
-  const allowedUidSet = Array.isArray(onlyUids) && onlyUids.length > 0 ? new Set(onlyUids.map(String)) : null;
+  const allowedUidSet = Array.isArray(onlyUids) ? new Set(onlyUids.map(String)) : null;
 
   for (const acc of store.accounts || []) {
     if (allowedUidSet && !allowedUidSet.has(String(acc.uid))) continue;
     const uid = acc.uid;
-    const accCfg = getEffectiveScheduleForCxUid(uid);
-    const isContinuousMode = Boolean(accCfg.masterEnabled && accCfg.forcePolling);
+    const schedule = getAccountActiveScheduleStatus(uid);
+    if (!schedule.inClass) continue;
     const eff = getEffectiveUserProfile(uid);
-    let courses = eff.coursesCache || [];
-    if (courses.length === 0 || forceAll) {
-      courses = await CXProtocol.getCoursesList(uid);
-    }
-
-    const accSchedule = getAccountActiveScheduleStatus(uid);
-    const regularInClass = Boolean(accSchedule.regularInClass);
-    const matchedLessons = accSchedule.matchedLessons || [];
-
+    const courses = eff.coursesCache?.length ? eff.coursesCache : await CXProtocol.getCoursesList(uid);
     for (const c of courses) {
-      let shouldScan = false;
-      if (forceAll) {
-        shouldScan = true;
-      } else {
-        const st = eff.courseSettings?.[c.courseId];
-        if (st?.isTestCourse) {
-          shouldScan = st.testPollingEnabled !== false;
-        } else if (isContinuousMode) {
-          shouldScan = true;
-        } else if (regularInClass) {
-          const pollingEnabled = st?.pollingEnabled !== undefined ? st.pollingEnabled : true;
-          if (pollingEnabled) {
-            if (matchedLessons.length > 0) {
-              shouldScan = matchedLessons.some((l) => {
-                if (l.classId && String(l.classId) !== String(c.classId)) return false;
-                if (l.courseId && String(l.courseId) === String(c.courseId)) return true;
-                if (l.name && (c.name || c.courseName) === l.name) return true;
-                return false;
-              });
-            } else {
-              shouldScan = true;
-            }
-          }
-        }
-      }
-
+      const shouldScan = eff.courseSettings?.[c.courseId]?.pollingEnabled !== false &&
+        schedule.matchedLessons.some(lesson => lessonMatchesCourse(lesson, c));
       const key = `${c.classId}_${c.courseId}`;
       if (!classMap.has(key)) {
         classMap.set(key, {
@@ -2315,13 +2190,9 @@ async function collectEnabledClassEntries(forceAll = false, onlyUids = null) {
           memberUids: [],
           memberNames: [],
           memberCpis: {},
-          probeUids: [],
         });
       }
       const entry = classMap.get(key);
-      if (!entry.probeUids.includes(uid)) {
-        entry.probeUids.push(uid);
-      }
       entry.memberCpis[uid] = c.cpi;
       if (shouldScan) {
         if (!entry.shouldScan) {
@@ -2345,7 +2216,7 @@ function sleepMs(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function pollCoursesOnce({ forceAll = false, triggerSource = '自动轮询', onlyUids = null, actorUsername = null } = {}) {
+async function pollCoursesOnce({ triggerSource = '自动轮询', onlyUids = null, actorUsername = null } = {}) {
   const isScopedScan = Array.isArray(onlyUids) && onlyUids.length > 0;
   if (!isScopedScan && isScanning) return { scanning: true, detected: lastDetectedActives };
   if (!isScopedScan) {
@@ -2364,7 +2235,7 @@ async function pollCoursesOnce({ forceAll = false, triggerSource = '自动轮询
       return { scanning: false, detected: [] };
     }
 
-    const { allEntries, enabledEntries } = await collectEnabledClassEntries(forceAll, onlyUids);
+    const { allEntries, enabledEntries } = await collectEnabledClassEntries(onlyUids);
     const allScanUids = Array.from(new Set(enabledEntries.flatMap((e) => e.memberUids || [])));
     sysLog('POLL', `[${triggerSource}] 扫描 ${enabledEntries.length}/${allEntries.length} 个班级`, {
       uids: allScanUids.length > 0 ? allScanUids : scopedLogMeta.uids,
@@ -2380,49 +2251,19 @@ async function pollCoursesOnce({ forceAll = false, triggerSource = '自动轮询
       const course = entry.course;
       const classLabel = course.note ? `${course.name}(${course.note})` : course.name;
       let actives = null;
-      let lastErr = null;
 
-      // Probe pool vs sign target pool decoupling: rotate memberUids first, fallback to probeUids for read-only active scanning
-      const primaryScanUids = entry.memberUids && entry.memberUids.length > 0 ? [...entry.memberUids] : [entry.scanUid];
-      pollCoursesOnce._rrIndex = ((pollCoursesOnce._rrIndex || 0) + 1) % Math.max(1, primaryScanUids.length);
-      const rotatedPrimaryUids = [
-        ...primaryScanUids.slice(pollCoursesOnce._rrIndex),
-        ...primaryScanUids.slice(0, pollCoursesOnce._rrIndex),
-      ];
-      const fallbackProbeUids = (entry.probeUids || []).filter((u) => !rotatedPrimaryUids.includes(u));
-      const orderedUids = [...rotatedPrimaryUids, ...fallbackProbeUids];
-
-      for (const tryUid of orderedUids) {
-        const tryCpi = (entry.memberCpis && entry.memberCpis[tryUid]) || course.cpi;
-        try {
-          actives = await CXProtocol.getActiveList(course.courseId, course.classId, tryCpi, tryUid);
-          break;
-        } catch (err) {
-          lastErr = err;
-          if (err && err.rateLimited) {
-            continue; // 该账号被频控，立即尝试同班级的下一个账号
-          }
-          break;
-        }
-      }
-
-      if (!actives) {
-        if (lastErr && lastErr.rateLimited) {
-          hitRateLimit = true;
-          sysLog('WARN', `[${triggerSource}] 班级《${classLabel}》全部账号均在学习通频控冷却中，跳过本班级`, { uids: entry.memberUids, ownerUsernames: scopedLogMeta.ownerUsernames });
-          continue;
-        }
-        if (lastErr) {
-          sysLog('WARN', `[${triggerSource}] 拉取《${classLabel}》活动失败: ${lastErr.message}`, { uids: entry.memberUids, ownerUsernames: scopedLogMeta.ownerUsernames });
-        }
+      try {
+        actives = await CXProtocol.getActiveList(course.courseId, course.classId, entry.memberCpis[entry.scanUid], entry.scanUid);
+      } catch (err) {
+        if (err.rateLimited || err.statusCode === 403) hitRateLimit = true;
+        sysLog('WARN', `[${triggerSource}] 拉取《${classLabel}》活动失败: ${err.message}`, { ...scopedLogMeta, uids: entry.memberUids });
         continue;
       }
-
       for (const act of actives) {
         if (!act.isSignActivity || !act.status) continue;
 
         // 查询当前签到人数与班级总人数统计（用于界面展示 + 防钓鱼/防反向签到人数比例保护）
-        const probeUid = orderedUids[0] || entry.scanUid || store.currentUid;
+        const probeUid = entry.scanUid || store.currentUid;
         let stats = { signedCount: Number(act.attendNum || 0), totalCount: 0, signRatio: 0, startTimeMs: 0, endTimeMs: 0, isOver: false };
         try {
           stats = await CXProtocol.getSignAttendStats(act.id, course.courseId, course.classId, probeUid);
@@ -2448,7 +2289,7 @@ async function pollCoursesOnce({ forceAll = false, triggerSource = '自动轮询
         const handledKey = `${act.id}`;
         store.handledActiveKeys = store.handledActiveKeys || [];
         const alreadyHandled = store.handledActiveKeys.includes(handledKey);
-        if (!alreadyHandled || forceAll) {
+        if (!alreadyHandled) {
           // 按账号独立计算防钓鱼人数比例保护：已达标或未开保护的账号立即签，未达标的账号挂入 3s 高频盯盘
           const readyUids = [];
           const deferredUids = [];
@@ -2456,11 +2297,11 @@ async function pollCoursesOnce({ forceAll = false, triggerSource = '自动轮询
 
           for (const mUid of entry.memberUids) {
             const uKey = `${act.id}_${mUid}`;
-            if (!forceAll && store.handledActiveKeys.includes(uKey)) continue;
+            if (store.handledActiveKeys.includes(uKey)) continue;
             const uCfg = getEffectiveScheduleForCxUid(mUid);
             const protectEnabled = Boolean(uCfg.signThresholdEnabled);
             const thresholdRatio = Math.max(0.01, Math.min(0.99, Number(uCfg.signThresholdRatio ?? 0.3)));
-            if (!forceAll && protectEnabled && stats.totalCount > 0 && stats.signRatio < thresholdRatio) {
+            if (protectEnabled && stats.totalCount > 0 && stats.signRatio < thresholdRatio) {
               deferredUids.push(mUid);
               if (thresholdRatio > maxDeferredThreshold) maxDeferredThreshold = thresholdRatio;
             } else {
@@ -2829,20 +2670,15 @@ async function handleDetectedQrCodeText(qrText, meta = {}) {
 
   // 3. 若二维码没有带 id 且当前无候选，才错峰扫描已启用监测的班级
   if (candidateTargets.size === 0) {
-    const { enabledEntries } = await collectEnabledClassEntries(false);
+    const { enabledEntries } = await collectEnabledClassEntries();
     for (let idx = 0; idx < enabledEntries.length; idx++) {
       if (idx > 0) await sleepMs(450);
       const entry = enabledEntries[idx];
       const c = entry.course;
       let actives = null;
-      const candUids = entry.memberUids && entry.memberUids.length > 0 ? entry.memberUids : [entry.scanUid];
-      for (const u of candUids) {
-        const tryCpi = (entry.memberCpis && entry.memberCpis[u]) || c.cpi;
-        try {
-          actives = await CXProtocol.getActiveList(c.courseId, c.classId, tryCpi, u);
-          break;
-        } catch (_) {}
-      }
+      try {
+        actives = await CXProtocol.getActiveList(c.courseId, c.classId, entry.memberCpis[entry.scanUid], entry.scanUid);
+      } catch (_) {}
       if (!actives) continue;
       for (const act of actives) {
         if (!act.isSignActivity || !act.status) continue;
@@ -3545,15 +3381,7 @@ let immediatePollTimer = null;
 async function runScheduledPollTick() {
   const summary = getGlobalScheduleSummary();
   if (summary.inClass) {
-    const primaryUid = store.currentUid || store.accounts?.[0]?.uid;
-    const st = primaryUid ? summary.perAccountStatus?.[primaryUid] : null;
-    const modeLabel =
-      st?.mode === 'test_only'
-        ? '测试课程轮询'
-        : store.schedule?.forcePolling
-        ? '持续轮询'
-        : '课表轮询';
-    await pollCoursesOnce({ forceAll: false, triggerSource: modeLabel });
+    await pollCoursesOnce({ triggerSource: '课表轮询' });
   }
 }
 

@@ -286,8 +286,6 @@ function mergeCoursesForUser(uid) {
   return courses.map((c) => {
     const st = eff.courseSettings?.[c.courseId] || {
       pollingEnabled: true,
-      isTestCourse: false,
-      testPollingEnabled: true,
       location: null,
       imageObjectIds: [],
     };
@@ -295,8 +293,6 @@ function mergeCoursesForUser(uid) {
       ...c,
       settings: {
         pollingEnabled: st.pollingEnabled !== undefined ? st.pollingEnabled : true,
-        isTestCourse: Boolean(st.isTestCourse),
-        testPollingEnabled: st.testPollingEnabled !== undefined ? Boolean(st.testPollingEnabled) : true,
         location: st.location || null,
         randomOffsetEnabled:
           st.randomOffsetEnabled !== undefined
@@ -410,9 +406,9 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(200, { 'Content-Type': 'text/css; charset=utf-8', 'Cache-Control': 'no-store' });
         return res.end(fs.readFileSync(path.join(webRoot, 'style.css'), 'utf8'));
       }
-      if (pathname === '/app.js') {
+      if (pathname === '/app.js' || pathname === '/offline.js') {
         res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-store' });
-        return res.end(fs.readFileSync(path.join(webRoot, 'app.js'), 'utf8'));
+        return res.end(fs.readFileSync(path.join(webRoot, pathname.slice(1)), 'utf8'));
       }
       if (pathname === '/favicon.png' || pathname === '/favicon.ico') {
         res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' });
@@ -986,7 +982,6 @@ const server = http.createServer(async (req, res) => {
         serverTimeMs: nowMs,
         username: currentUsername,
         inClass: userInClass,
-        forcePolling: Boolean(store.schedule?.forcePolling),
         effectiveIntervalSeconds: getEffectiveTimerIntervalSeconds(),
         activeBountyCount: activeBounties.length,
         alerts: visibleAlerts,
@@ -1245,10 +1240,6 @@ const server = http.createServer(async (req, res) => {
       if (!canSessionEditCxAccount(currentSess, uid)) {
         return sendJson(res, { ok: false, msg: '只读模式：无法修改其他用户的课程设置' }, 403);
       }
-      const uSched = getEffectiveScheduleForCxUid(uid);
-      if (uSched?.forcePolling) {
-        return sendJson(res, { ok: false, msg: '当前为持续轮询模式，无法修改常规课程轮询开关（测试课程除外）' });
-      }
 
       const prof = ensureUserProfile(uid);
       const eff = getEffectiveUserProfile(uid);
@@ -1263,17 +1254,11 @@ const server = http.createServer(async (req, res) => {
 
         const prev = prof.courseSettings[cid] || eff.courseSettings?.[cid] || {
           pollingEnabled: true,
-          isTestCourse: false,
-          testPollingEnabled: true,
           location: null,
           imageObjectIds: [],
         };
-        if (prev.isTestCourse) continue; // 测试课程独立控制，不受常规批量开关影响
-
         prof.courseSettings[cid] = {
           pollingEnabled: Boolean(pollingEnabled),
-          isTestCourse: false,
-          testPollingEnabled: prev.testPollingEnabled !== undefined ? Boolean(prev.testPollingEnabled) : true,
           location: prev.location || null,
           ...(prev.randomOffsetEnabled !== undefined ? { randomOffsetEnabled: Boolean(prev.randomOffsetEnabled) } : {}),
           ...(prev.randomOffsetMeters !== undefined ? { randomOffsetMeters: Number(prev.randomOffsetMeters) } : {}),
@@ -1293,8 +1278,6 @@ const server = http.createServer(async (req, res) => {
       const {
         courseId,
         pollingEnabled,
-        isTestCourse,
-        testPollingEnabled,
         location,
         randomOffsetEnabled,
         randomOffsetMeters,
@@ -1304,28 +1287,15 @@ const server = http.createServer(async (req, res) => {
       if (!canSessionEditCxAccount(currentSess, uid)) {
         return sendJson(res, { ok: false, msg: '只读模式：无法修改其他用户的课程设置' }, 403);
       }
-      const uSched = getEffectiveScheduleForCxUid(uid);
-      if (pollingEnabled !== undefined && isTestCourse === undefined && testPollingEnabled === undefined && uSched?.forcePolling) {
-        return sendJson(res, { ok: false, msg: '当前为持续轮询模式，无法修改常规课程轮询开关（测试课程除外）' });
-      }
 
       const prof = ensureUserProfile(uid);
       const prev = prof.courseSettings[courseId] || {
         pollingEnabled: true,
-        isTestCourse: false,
-        testPollingEnabled: true,
         location: null,
         imageObjectIds: [],
       };
       prof.courseSettings[courseId] = {
         pollingEnabled: pollingEnabled !== undefined ? Boolean(pollingEnabled) : prev.pollingEnabled,
-        isTestCourse: isTestCourse !== undefined ? Boolean(isTestCourse) : Boolean(prev.isTestCourse),
-        testPollingEnabled:
-          testPollingEnabled !== undefined
-            ? Boolean(testPollingEnabled)
-            : prev.testPollingEnabled !== undefined
-            ? Boolean(prev.testPollingEnabled)
-            : true,
         location: location !== undefined ? location : prev.location,
         ...(randomOffsetEnabled !== undefined
           ? { randomOffsetEnabled: Boolean(randomOffsetEnabled) }
@@ -1373,26 +1343,12 @@ const server = http.createServer(async (req, res) => {
       const classId = parsedUrl.searchParams.get('classId') || '';
       const cpi = parsedUrl.searchParams.get('cpi') || '';
       const primaryUid = parsedUrl.searchParams.get('uid') || store.currentUid;
-      const matchedAccs = findMatchingAccountsForClass(courseId, classId, null);
-      const tryUids = [
-        primaryUid,
-        ...matchedAccs.map((a) => a.uid).filter((u) => u !== primaryUid),
-      ].filter(Boolean);
-      let actives = [];
-      let lastError = null;
-      for (const u of tryUids) {
-        try {
-          actives = await CXProtocol.getActiveList(courseId, classId, cpi, u);
-          lastError = null;
-          break;
-        } catch (e) {
-          lastError = e;
-        }
+      try {
+        const actives = await CXProtocol.getActiveList(courseId, classId, cpi, primaryUid);
+        return sendJson(res, { ok: true, actives });
+      } catch (err) {
+        return sendJson(res, { ok: false, msg: err.message, actives: [] });
       }
-      if (lastError && actives.length === 0) {
-        return sendJson(res, { ok: false, msg: lastError.message, actives: [] });
-      }
-      return sendJson(res, { ok: true, actives });
     }
 
     if (pathname === '/api/courses/activeInfo' && req.method === 'GET') {
@@ -1711,7 +1667,7 @@ const server = http.createServer(async (req, res) => {
 
     // 8. 快速签到与手动详细签到（Admin 快速签到全部账号，User 仅快速签到自己绑定的账号）
     if (pathname === '/api/sign/quick' && req.method === 'POST') {
-      const body = await readBodyJson(req);
+      await readBodyJson(req);
       const isAdmin = !currentSess || currentSess.role === 'admin';
       const actorName = currentSess?.username || ensurePanelAuthStore().username || 'ishit';
       let onlyUids = null;
@@ -1723,7 +1679,6 @@ const server = http.createServer(async (req, res) => {
         onlyUids = myAccs.map((a) => String(a.uid));
       }
       const resData = await pollCoursesOnce({
-        forceAll: Boolean(body.forceAll),
         triggerSource: isAdmin ? '快速扫描签到(全部账号)' : `快速扫描签到(${actorName})`,
         onlyUids,
         actorUsername: actorName,
@@ -2169,7 +2124,6 @@ const server = http.createServer(async (req, res) => {
       // 提取合法轮询配置字段
       const patch = {};
       if (body.masterEnabled !== undefined) patch.masterEnabled = Boolean(body.masterEnabled);
-      if (body.forcePolling !== undefined) patch.forcePolling = Boolean(body.forcePolling);
       if (body.intervalSeconds !== undefined) patch.intervalSeconds = Math.max(3, Math.min(300, Number(body.intervalSeconds || 15)));
       if (body.signThresholdEnabled !== undefined) patch.signThresholdEnabled = Boolean(body.signThresholdEnabled);
       if (body.signThresholdRatio !== undefined) patch.signThresholdRatio = Math.max(0.01, Math.min(0.99, Number(body.signThresholdRatio || 0.3)));
@@ -2227,7 +2181,6 @@ const server = http.createServer(async (req, res) => {
           if (ucfg && typeof ucfg === 'object') {
             userIntervals[uname] = {
               masterEnabled: ucfg.masterEnabled !== false,
-              forcePolling: Boolean(ucfg.forcePolling),
               intervalSeconds: Number(ucfg.intervalSeconds || store.schedule?.intervalSeconds || 25),
             };
           }

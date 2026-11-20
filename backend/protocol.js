@@ -253,20 +253,31 @@ class CXProtocol {
 
   static async getActiveList(courseId, classId, cpi, userId = store.currentUid) {
     if (!userId) return [];
-    CXProtocol._activeCooldowns = CXProtocol._activeCooldowns || {};
-    CXProtocol._appActiveCooldowns = CXProtocol._appActiveCooldowns || {};
-    CXProtocol._joinTimeCache = CXProtocol._joinTimeCache || {};
-    CXProtocol._signTypeCache = CXProtocol._signTypeCache || {};
+    CXProtocol._signTypeCache ||= {};
+    CXProtocol._joinTimeCache ||= {};
+    const cdKey = [userId, courseId, classId].join('_');
+    const cooldown = CXProtocol.activityCooldown;
+    if (cooldown && cooldown.until > Date.now()) throw cooldown.error;
 
-    const cdKey = userId + "_" + courseId + "_" + classId;
-    const nowTop = Date.now();
-    const cooldownUntilTop = CXProtocol._activeCooldowns[cdKey] || 0;
-    if (cooldownUntilTop > nowTop) {
-      const remainSec = Math.ceil((cooldownUntilTop - nowTop) / 1000);
-      const err = new Error("\u5b66\u4e60\u901a\u63a5\u53e3\u9891\u63a7\u51b7\u5374\u4e2d(\u5269\u4f59" + remainSec + "s)");
-      err.rateLimited = true;
-      err.inCooldown = true;
-      throw err;
+    function handleFailure(error) {
+      if (error.statusCode === 403 || error.statusCode === 429) {
+        error.rateLimited = error.statusCode === 429;
+        const seconds = error.rateLimited ? 60 : 900;
+        error.message += `（本地暂停查询 ${seconds} 秒）`;
+        CXProtocol.activityCooldown = { until: Date.now() + seconds * 1000, error };
+      }
+      throw error;
+    }
+
+    function checkResponse(data) {
+      const message = typeof data === 'string' ? data : String(data?.errorMsg || '');
+      const denied = /黑名单|拒绝访问|禁止访问/.test(message);
+      const throttled = /频繁|限流|频控/.test(message);
+      if (denied || throttled || (data && Number(data.result) === 0 && message)) {
+        const error = new Error(message.slice(0, 240));
+        if (denied || throttled) error.statusCode = denied ? 403 : 429;
+        handleFailure(error);
+      }
     }
 
     const signTypeMap = { 0: "normal", 2: "qrCode", 3: "pattern", 4: "location", 5: "code" };
@@ -281,9 +292,7 @@ class CXProtocol {
     };
 
     // 1. App encrypted endpoint (ppt/activeAPI/taskactivelist)
-    let appRateLimited = false;
-    const appCooldownUntil = CXProtocol._appActiveCooldowns[cdKey] || 0;
-    if (appCooldownUntil <= nowTop) {
+    {
       let cachedJoinTime = CXProtocol._joinTimeCache[cdKey];
       if (cachedJoinTime === undefined) {
         try {
@@ -299,7 +308,8 @@ class CXProtocol {
             userId,
           });
           cachedJoinTime = joinRes?.data?.[0]?.createtime || "__none__";
-        } catch (_) {
+        } catch (error) {
+          if (error.statusCode) handleFailure(error);
           cachedJoinTime = "__none__";
         }
         CXProtocol._joinTimeCache[cdKey] = cachedJoinTime;
@@ -320,27 +330,22 @@ class CXProtocol {
           params: appParams,
           userId,
         });
-      } catch (_) {}
-
-      appRateLimited =
-        Boolean(taskData?.errorMsg && String(taskData.errorMsg).includes("\u9891\u7e41")) ||
-        (typeof taskData === "string" && taskData.includes("\u9891\u7e41")) ||
-        (taskData && Number(taskData.result) === 0 && Boolean(taskData.errorMsg));
-
+      } catch (error) {
+        handleFailure(error);
+      }
+      checkResponse(taskData);
       if (
         taskData &&
-        !appRateLimited &&
         Number(taskData.result ?? 1) !== 0 &&
         Array.isArray(taskData.activeList)
       ) {
-        delete CXProtocol._activeCooldowns[cdKey];
-        delete CXProtocol._appActiveCooldowns[cdKey];
         const result = [];
         for (const item of taskData.activeList) {
-          const id = String(item.id);
+          if (!item) continue;
+          const id = String(item.id ?? '').trim();
           const activeType = Number(item.activeType || 0);
           const status = Number(item.status) === 1;
-          const isSignActivity = [2, 54, 74].includes(activeType);
+          const isSignActivity = Boolean(id) && [2, 54, 74].includes(activeType);
           let signType = null;
           if (isSignActivity) {
             if (item.otherId !== undefined && item.otherId !== null) {
@@ -357,7 +362,9 @@ class CXProtocol {
                     signType = signTypeMap[Number(info.otherId)] || "normal";
                     CXProtocol._signTypeCache[id] = signType;
                   }
-                } catch (_) {}
+                } catch (error) {
+                  if (error.statusCode) handleFailure(error);
+                }
               }
               if (!signType) signType = "normal";
             }
@@ -379,11 +386,6 @@ class CXProtocol {
         return result;
       }
 
-      if (appRateLimited) {
-        CXProtocol._appActiveCooldowns[cdKey] = Date.now() + 60 * 1000;
-      }
-    } else {
-      appRateLimited = true;
     }
 
     // 2. Web hot-standby fallback (v2/apis/active/student/activelist)
@@ -399,20 +401,19 @@ class CXProtocol {
         },
         userId,
       });
-    } catch (_) {}
-
-    const webRateLimited =
-      Boolean(webTaskData?.errorMsg && String(webTaskData.errorMsg).includes("\u9891\u7e41")) ||
-      (typeof webTaskData === "string" && webTaskData.includes("\u9891\u7e41"));
+    } catch (error) {
+      handleFailure(error);
+    }
+    checkResponse(webTaskData);
 
     if (webTaskData && webTaskData.result === 1 && Array.isArray(webTaskData?.data?.activeList)) {
-      delete CXProtocol._activeCooldowns[cdKey];
       const result = [];
       for (const w of webTaskData.data.activeList) {
-        const id = String(w.id);
+        if (!w) continue;
+        const id = String(w.id ?? '').trim();
         const activeType = Number(w.activeType ?? w.type ?? 0);
         const status = Number(w.status) === 1;
-        const isSignActivity = [2, 54, 74].includes(activeType);
+        const isSignActivity = Boolean(id) && [2, 54, 74].includes(activeType);
         let signType = null;
         if (isSignActivity) {
           signType =
@@ -437,14 +438,7 @@ class CXProtocol {
       return result;
     }
 
-    if (webRateLimited || appRateLimited) {
-      CXProtocol._activeCooldowns[cdKey] = Date.now() + 60 * 1000;
-      const err = new Error("\u5b66\u4e60\u901a\u63a5\u53e3\u89e6\u53d1\u9891\u63a7(\u5df2\u8fdb\u516560s\u51b7\u5374\u4fdd\u62a4)");
-      err.rateLimited = true;
-      throw err;
-    }
-
-    return [];
+    throw new Error('学习通活动列表格式无法识别');
   }
 
   static async getActiveInfoWeb(activeId, userId = store.currentUid) {

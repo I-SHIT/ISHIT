@@ -2,7 +2,7 @@ const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-const andRoot = 'E:\\LynnH Ma\\Progarmming\\ISHIT\\frontend\\android';
+const andRoot = __dirname;
 const buildDir = path.join(andRoot, 'build');
 const genJavaDir = path.join(buildDir, 'gen');
 const classesDir = path.join(buildDir, 'classes');
@@ -16,7 +16,7 @@ for (const d of [genJavaDir, classesDir, dexDir, resFlatDir]) {
 
 const btDir = 'D:\\OpenAI\\BuildTools\\android-sdk\\build-tools\\android-14';
 const androidJar = 'D:\\OpenAI\\BuildTools\\android-sdk\\platforms\\android-34\\android.jar';
-const jdkBin = 'C:\\Program Files\\Java\\jdk-25.0.4\\bin';
+const jdkBin = 'C:\\Program Files\\Java\\jdk-17\\bin';
 const javaExe = path.join(jdkBin, 'java.exe');
 const javacExe = path.join(jdkBin, 'javac.exe');
 const keytoolExe = path.join(jdkBin, 'keytool.exe');
@@ -105,7 +105,7 @@ if (!fs.existsSync(keystore)) {
   ], { stdio: 'inherit' });
 }
 
-const outApk = 'E:\\LynnH Ma\\Progarmming\\ISHIT\\dist\\ISHIT-Android.apk';
+const outApk = path.resolve(andRoot, "../../dist/ISHIT-Android.apk");
 execFileSync(javaExe, [
   '-jar', path.join(btDir, 'lib', 'apksigner.jar'),
   'sign', '--v1-signing-enabled', 'true', '--v2-signing-enabled', 'true', '--v3-signing-enabled', 'true',

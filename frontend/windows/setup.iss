@@ -1,14 +1,14 @@
 [Setup]
 AppId={{8E9D5C31-7A2F-4B18-9F60-4B15A8E9D210}
 AppName=ISHIT
-AppVersion=0.1
+AppVersion=0.2.0
 AppPublisher=ISHIT
 DefaultDirName={autopf}\ISHIT
 DefaultGroupName=ISHIT
 AllowNoIcons=yes
-OutputDir=E:\LynnH Ma\Progarmming\ISHIT\dist
+OutputDir=..\..\dist
 OutputBaseFilename=ISHIT-Windows-Setup
-SetupIconFile=E:\LynnH Ma\Progarmming\ISHIT\frontend\windows\app.ico
+SetupIconFile=app.ico
 UninstallDisplayIcon={app}\ISHIT.exe
 Compression=lzma2/fast
 SolidCompression=yes
@@ -24,7 +24,7 @@ Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.i
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "E:\LynnH Ma\Progarmming\ISHIT\frontend\windows\publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\ISHIT"; Filename: "{app}\ISHIT.exe"
